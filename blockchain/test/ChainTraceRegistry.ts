@@ -40,6 +40,31 @@ describe("ChainTraceRegistry - Role Based Access", function () {
 
     const correctHash = "0x" + "a".repeat(64);
     const wrongHash = "0x" + "b".repeat(64);
+    const auditEvidenceHash = "0x" + "c".repeat(64);
+    const deploymentHash = "0x" + "d".repeat(64);
+
+    async function prepareCompleteModel() {
+        const context = await deployRegistry();
+
+        const { registry, datasetProvider, modelDeveloper } = context;
+
+        // Register dataset.
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        // Register training run.
+        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
+
+        // Register model.
+        await registry.connect(modelDeveloper).registerArtifact(modelId, 2, correctHash);
+
+        // Dataset -> Training Run.
+        await registry.connect(modelDeveloper).linkArtifacts(datasetId, trainingId, 0);
+
+        // Training Run -> Model.
+        await registry.connect(modelDeveloper).linkArtifacts(trainingId, modelId, 1);
+
+        return context;
+    }
 
     // 1. Verify administrator role.
 
@@ -80,14 +105,16 @@ describe("ChainTraceRegistry - Role Based Access", function () {
 
     // 4. Deployment operator permissions.
 
-    it("Deployment operator should register containers and deployments", async function () {
+    it("Deployment operator should register container images", async function () {
         const { registry, deploymentOperator } = await deployRegistry();
 
         await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
 
-        await registry.connect(deploymentOperator).registerArtifact(deploymentId, 4, correctHash);
+        const artifact = await registry.getArtifact(containerId);
 
-        expect((await registry.getArtifact(deploymentId)).exists).to.equal(true);
+        expect(artifact.exists).to.equal(true);
+
+        expect(Number(artifact.artifactType)).to.equal(3);
     });
 
     // 5. Unauthorized registration.
@@ -194,49 +221,48 @@ describe("ChainTraceRegistry - Role Based Access", function () {
     // PROVENANCE LINKING TESTS
     // ================================================
 
-    it("Should create a complete artifact provenance chain", async function () {
-        const { registry, datasetProvider, modelDeveloper, deploymentOperator } = await deployRegistry();
+    it("Should approve a model and record its complete deployment chain", async function () {
+        const { registry, auditor, deploymentOperator } = await prepareCompleteModel();
 
-        // Register all five artifacts.
-
-        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
-
-        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
-
-        await registry.connect(modelDeveloper).registerArtifact(modelId, 2, correctHash);
-
-        await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
-
-        await registry.connect(deploymentOperator).registerArtifact(deploymentId, 4, correctHash);
-
-        // Dataset -> Training Run
-        await registry.connect(modelDeveloper).linkArtifacts(datasetId, trainingId, 0);
-
-        // Training Run -> Model
-        await registry.connect(modelDeveloper).linkArtifacts(trainingId, modelId, 1);
-
-        // Model -> Container Image
-        await registry.connect(deploymentOperator).linkArtifacts(modelId, containerId, 2);
-
-        // Container Image -> Deployment
-        await expect(registry.connect(deploymentOperator).linkArtifacts(containerId, deploymentId, 3)).to.emit(
+        // Auditor approves the model.
+        await expect(registry.connect(auditor).approveModel(modelId, auditEvidenceHash)).to.emit(
             registry,
-            "ArtifactLinked",
+            "ModelApproved",
         );
 
-        // Verify the first relationship.
-        const link = await registry.getProvenanceLink(datasetId, trainingId);
+        // Check approval information.
+        const approval = await registry.getModelApproval(modelId);
 
-        expect(Number(link.relationshipType)).to.equal(0);
+        expect(approval.approved).to.equal(true);
 
-        expect(link.linkedBy).to.equal(await modelDeveloper.getAddress());
+        expect(approval.approvedBy).to.equal(await auditor.getAddress());
 
-        expect(link.exists).to.equal(true);
+        expect(approval.evidenceHash).to.equal(auditEvidenceHash);
 
-        // Verify the outgoing links of the dataset.
-        const outgoing = await registry.getOutgoingLinks(datasetId);
+        // Register a container image.
+        await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
 
-        expect(outgoing).to.deep.equal([trainingId]);
+        // Approved model -> Container Image.
+        await registry.connect(deploymentOperator).linkArtifacts(modelId, containerId, 2);
+
+        // Record the deployment atomically.
+        await expect(
+            registry.connect(deploymentOperator).recordDeployment(containerId, deploymentId, deploymentHash),
+        ).to.emit(registry, "ArtifactRegistered");
+
+        // Confirm deployment artifact registration.
+        const deployment = await registry.getArtifact(deploymentId);
+
+        expect(deployment.exists).to.equal(true);
+
+        expect(deployment.contentHash).to.equal(deploymentHash);
+
+        // Confirm Container Image -> Deployment relationship.
+        const link = await registry.getProvenanceLink(containerId, deploymentId);
+
+        expect(Number(link.relationshipType)).to.equal(3);
+
+        expect(link.linkedBy).to.equal(await deploymentOperator.getAddress());
     });
 
     it("Should reject invalid artifact type relationships", async function () {
@@ -302,5 +328,108 @@ describe("ChainTraceRegistry - Role Based Access", function () {
             registry,
             "ProvenanceLinkNotFound",
         );
+    });
+
+    // ================================================
+    // MODEL APPROVAL TESTS
+    // ================================================
+
+    it("Should reject approval when model provenance is incomplete", async function () {
+        const { registry, modelDeveloper, auditor } = await deployRegistry();
+
+        await registry.connect(modelDeveloper).registerArtifact(modelId, 2, correctHash);
+
+        await expect(registry.connect(auditor).approveModel(modelId, auditEvidenceHash)).to.be.revertedWithCustomError(
+            registry,
+            "IncompleteModelProvenance",
+        );
+    });
+
+    it("Only an auditor should be able to approve a model", async function () {
+        const { registry, modelDeveloper } = await prepareCompleteModel();
+
+        await expect(
+            registry.connect(modelDeveloper).approveModel(modelId, auditEvidenceHash),
+        ).to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount");
+    });
+
+    it("Should prevent a model developer from approving their own model", async function () {
+        const { registry, modelDeveloper } = await prepareCompleteModel();
+
+        // Give the developer an auditor role too.
+        // The separate self-approval check must still reject them.
+        await registry.grantRole(await registry.AUDITOR_ROLE(), await modelDeveloper.getAddress());
+
+        await expect(
+            registry.connect(modelDeveloper).approveModel(modelId, auditEvidenceHash),
+        ).to.be.revertedWithCustomError(registry, "SelfApprovalNotAllowed");
+    });
+
+    it("Should reject approval without an evidence hash", async function () {
+        const { registry, auditor } = await prepareCompleteModel();
+
+        await expect(registry.connect(auditor).approveModel(modelId, ethers.ZeroHash)).to.be.revertedWithCustomError(
+            registry,
+            "InvalidEvidenceHash",
+        );
+    });
+
+    it("Should reject duplicate active model approval", async function () {
+        const { registry, auditor } = await prepareCompleteModel();
+
+        await registry.connect(auditor).approveModel(modelId, auditEvidenceHash);
+
+        await expect(registry.connect(auditor).approveModel(modelId, auditEvidenceHash)).to.be.revertedWithCustomError(
+            registry,
+            "ModelAlreadyApproved",
+        );
+    });
+
+    // ================================================
+    // DEPLOYMENT RESTRICTION TESTS
+    // ================================================
+
+    it("Should prevent packaging an unapproved model", async function () {
+        const { registry, deploymentOperator } = await prepareCompleteModel();
+
+        await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
+
+        await expect(
+            registry.connect(deploymentOperator).linkArtifacts(modelId, containerId, 2),
+        ).to.be.revertedWithCustomError(registry, "ModelNotApproved");
+    });
+
+    it("Should prevent direct registration of deployment artifacts", async function () {
+        const { registry, deploymentOperator } = await deployRegistry();
+
+        await expect(
+            registry.connect(deploymentOperator).registerArtifact(deploymentId, 4, deploymentHash),
+        ).to.be.revertedWithCustomError(registry, "DeploymentMustUseRecordFunction");
+    });
+
+    it("Should reject deployment if model approval is revoked", async function () {
+        const { registry, auditor, deploymentOperator } = await prepareCompleteModel();
+
+        // Approve the model.
+        await registry.connect(auditor).approveModel(modelId, auditEvidenceHash);
+
+        // Register and package the container.
+        await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
+
+        await registry.connect(deploymentOperator).linkArtifacts(modelId, containerId, 2);
+
+        // Revoke approval.
+        await registry.connect(auditor).revokeModelApproval(modelId);
+
+        const approval = await registry.getModelApproval(modelId);
+
+        expect(approval.approved).to.equal(false);
+
+        expect(approval.revokedBy).to.equal(await auditor.getAddress());
+
+        // Deployment must now be rejected.
+        await expect(
+            registry.connect(deploymentOperator).recordDeployment(containerId, deploymentId, deploymentHash),
+        ).to.be.revertedWithCustomError(registry, "ModelNotApproved");
     });
 });

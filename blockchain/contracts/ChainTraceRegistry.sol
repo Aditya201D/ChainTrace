@@ -25,7 +25,7 @@ contract ChainTraceRegistry is AccessControl {
 
 
     // =================================================
-    // 2. ARTIFACT TYPES
+    // 2. ENUMS
     // =================================================
 
     enum ArtifactType {
@@ -36,11 +36,6 @@ contract ChainTraceRegistry is AccessControl {
         Deployment
     }
 
-
-    // =================================================
-    // 3. RELATIONSHIP TYPES
-    // =================================================
-
     enum RelationshipType {
         UsedForTraining,
         Produced,
@@ -50,7 +45,7 @@ contract ChainTraceRegistry is AccessControl {
 
 
     // =================================================
-    // 4. DATA STRUCTURES
+    // 3. STRUCTURES
     // =================================================
 
     struct Artifact {
@@ -68,23 +63,44 @@ contract ChainTraceRegistry is AccessControl {
         bool exists;
     }
 
+    struct ModelApproval {
+        bool approved;
+        address approvedBy;
+        uint256 approvedAt;
+        bytes32 evidenceHash;
+        address revokedBy;
+        uint256 revokedAt;
+    }
+
 
     // =================================================
-    // 5. STORAGE
+    // 4. STORAGE
     // =================================================
 
     mapping(bytes32 => Artifact) private artifacts;
 
-    // Stores a relationship between two artifacts.
     mapping(bytes32 => mapping(bytes32 => ProvenanceLink))
         private provenanceLinks;
 
-    // Stores the IDs of artifacts linked from a source.
     mapping(bytes32 => bytes32[]) private outgoingLinks;
+
+    // Whether a training run has at least one dataset.
+    mapping(bytes32 => bool) private trainingRunHasDataset;
+
+    // The training run associated with each model.
+    mapping(bytes32 => bytes32) private modelTrainingRun;
+
+    // The model packaged into each container image.
+    mapping(bytes32 => bytes32) private containerModel;
+
+    // Current approval state of each model.
+    mapping(bytes32 => ModelApproval) private modelApprovals;
+
+    mapping(bytes32 => bool) private trainingRunHasModel;
 
 
     // =================================================
-    // 6. EVENTS
+    // 5. EVENTS
     // =================================================
 
     event ArtifactRegistered(
@@ -103,9 +119,23 @@ contract ChainTraceRegistry is AccessControl {
         uint256 linkedAt
     );
 
+    event ModelApproved(
+        bytes32 indexed modelArtifactId,
+        bytes32 indexed modelHash,
+        address indexed approvedBy,
+        bytes32 evidenceHash,
+        uint256 approvedAt
+    );
+
+    event ModelApprovalRevoked(
+        bytes32 indexed modelArtifactId,
+        address indexed revokedBy,
+        uint256 revokedAt
+    );
+
 
     // =================================================
-    // 7. CUSTOM ERRORS
+    // 6. CUSTOM ERRORS
     // =================================================
 
     error InvalidArtifactId();
@@ -130,9 +160,26 @@ contract ChainTraceRegistry is AccessControl {
         bytes32 targetArtifactId
     );
 
+    error ModelAlreadyLinkedToTrainingRun(bytes32 modelArtifactId);
+    error IncompleteModelProvenance(bytes32 modelArtifactId);
+
+    error InvalidModelArtifact(bytes32 artifactId);
+    error SelfApprovalNotAllowed();
+    error InvalidEvidenceHash();
+
+    error ModelAlreadyApproved(bytes32 modelArtifactId);
+    error ModelNotApproved(bytes32 modelArtifactId);
+
+    error ContainerAlreadyLinkedToModel(bytes32 containerId);
+    error ContainerNotLinkedToModel(bytes32 containerId);
+
+    error DeploymentMustUseRecordFunction();
+
+    error TrainingRunProvenanceFinalized(bytes32 trainingRunId);
+
 
     // =================================================
-    // 8. CONSTRUCTOR
+    // 7. CONSTRUCTOR
     // =================================================
 
     constructor() {
@@ -141,7 +188,7 @@ contract ChainTraceRegistry is AccessControl {
 
 
     // =================================================
-    // 9. REGISTRATION PERMISSIONS
+    // 8. PERMISSION HELPERS
     // =================================================
 
     function _checkRegistrationPermission(
@@ -166,10 +213,6 @@ contract ChainTraceRegistry is AccessControl {
     }
 
 
-    // =================================================
-    // 10. LINKING PERMISSIONS
-    // =================================================
-
     function _checkLinkPermission(
         RelationshipType relationshipType
     ) private view {
@@ -189,7 +232,7 @@ contract ChainTraceRegistry is AccessControl {
 
 
     // =================================================
-    // 11. ARTIFACT REGISTRATION
+    // 9. REGISTER ARTIFACT
     // =================================================
 
     function registerArtifact(
@@ -199,6 +242,12 @@ contract ChainTraceRegistry is AccessControl {
     ) external {
 
         _checkRegistrationPermission(artifactType);
+
+        // Deployments must be registered through
+        // recordDeployment(), which checks model approval.
+        if (artifactType == ArtifactType.Deployment) {
+            revert DeploymentMustUseRecordFunction();
+        }
 
         if (artifactId == bytes32(0)) {
             revert InvalidArtifactId();
@@ -231,7 +280,7 @@ contract ChainTraceRegistry is AccessControl {
 
 
     // =================================================
-    // 12. CREATE PROVENANCE LINK
+    // 10. CREATE PROVENANCE LINKS
     // =================================================
 
     function linkArtifacts(
@@ -240,22 +289,31 @@ contract ChainTraceRegistry is AccessControl {
         RelationshipType relationshipType
     ) external {
 
-        // Check the caller's permissions.
         _checkLinkPermission(relationshipType);
 
-        // Validate artifact IDs.
+        // Deployment links must be created atomically
+        // through recordDeployment().
+        if (relationshipType == RelationshipType.DeployedAs) {
+            revert DeploymentMustUseRecordFunction();
+        }
+
+        // Once a training run has produced a model,
+        // its dataset lineage cannot be changed.
+        if (
+            relationshipType == RelationshipType.UsedForTraining &&
+            trainingRunHasModel[targetArtifactId]
+        ) {
+            revert TrainingRunProvenanceFinalized(targetArtifactId);
+        }
+
         if (
             sourceArtifactId == bytes32(0) ||
-            targetArtifactId == bytes32(0)
+            targetArtifactId == bytes32(0) ||
+            sourceArtifactId == targetArtifactId
         ) {
             revert InvalidArtifactId();
         }
 
-        if (sourceArtifactId == targetArtifactId) {
-            revert InvalidArtifactId();
-        }
-
-        // Both artifacts must already be registered.
         if (!artifacts[sourceArtifactId].exists) {
             revert ArtifactNotFound(sourceArtifactId);
         }
@@ -270,7 +328,6 @@ contract ChainTraceRegistry is AccessControl {
         ArtifactType targetType =
             artifacts[targetArtifactId].artifactType;
 
-        // Validate the relationship between artifact types.
         bool validRelationship =
             (
                 relationshipType == RelationshipType.UsedForTraining &&
@@ -286,11 +343,6 @@ contract ChainTraceRegistry is AccessControl {
                 relationshipType == RelationshipType.PackagedAs &&
                 sourceType == ArtifactType.Model &&
                 targetType == ArtifactType.ContainerImage
-            ) ||
-            (
-                relationshipType == RelationshipType.DeployedAs &&
-                sourceType == ArtifactType.ContainerImage &&
-                targetType == ArtifactType.Deployment
             );
 
         if (!validRelationship) {
@@ -301,7 +353,6 @@ contract ChainTraceRegistry is AccessControl {
             );
         }
 
-        // Prevent duplicate relationships.
         if (
             provenanceLinks[sourceArtifactId][targetArtifactId].exists
         ) {
@@ -311,7 +362,36 @@ contract ChainTraceRegistry is AccessControl {
             );
         }
 
-        // Store the relationship.
+        // A training run must have at least one dataset.
+        if (
+            relationshipType == RelationshipType.Produced &&
+            !trainingRunHasDataset[sourceArtifactId]
+        ) {
+            revert IncompleteModelProvenance(targetArtifactId);
+        }
+
+        // A model can have only one producing training run.
+        if (
+            relationshipType == RelationshipType.Produced &&
+            modelTrainingRun[targetArtifactId] != bytes32(0)
+        ) {
+            revert ModelAlreadyLinkedToTrainingRun(targetArtifactId);
+        }
+
+        // A model must be approved before packaging.
+        if (relationshipType == RelationshipType.PackagedAs) {
+
+            if (!modelApprovals[sourceArtifactId].approved) {
+                revert ModelNotApproved(sourceArtifactId);
+            }
+
+            // One container image represents one model
+            // in this prototype.
+            if (containerModel[targetArtifactId] != bytes32(0)) {
+                revert ContainerAlreadyLinkedToModel(targetArtifactId);
+            }
+        }
+
         provenanceLinks[sourceArtifactId][targetArtifactId] =
             ProvenanceLink({
                 relationshipType: relationshipType,
@@ -320,10 +400,22 @@ contract ChainTraceRegistry is AccessControl {
                 exists: true
             });
 
-        // Add the target to the source's outgoing links.
         outgoingLinks[sourceArtifactId].push(targetArtifactId);
 
-        // Emit an event for off-chain indexing.
+        // Maintain indexes for workflow validation.
+        if (relationshipType == RelationshipType.UsedForTraining) {
+            trainingRunHasDataset[targetArtifactId] = true;
+        }
+
+        if (relationshipType == RelationshipType.Produced) {
+            modelTrainingRun[targetArtifactId] = sourceArtifactId;
+            trainingRunHasModel[sourceArtifactId] = true;
+        }
+
+        if (relationshipType == RelationshipType.PackagedAs) {
+            containerModel[targetArtifactId] = sourceArtifactId;
+        }
+
         emit ArtifactLinked(
             sourceArtifactId,
             targetArtifactId,
@@ -335,7 +427,194 @@ contract ChainTraceRegistry is AccessControl {
 
 
     // =================================================
-    // 13. RETRIEVE ARTIFACT
+    // 11. APPROVE MODEL
+    // =================================================
+
+    function approveModel(
+        bytes32 modelArtifactId,
+        bytes32 evidenceHash
+    ) external {
+
+        _checkRole(AUDITOR_ROLE);
+
+        Artifact storage model = artifacts[modelArtifactId];
+
+        if (
+            !model.exists ||
+            model.artifactType != ArtifactType.Model
+        ) {
+            revert InvalidModelArtifact(modelArtifactId);
+        }
+
+        // Require a dataset -> training run -> model chain.
+        if (modelTrainingRun[modelArtifactId] == bytes32(0)) {
+            revert IncompleteModelProvenance(modelArtifactId);
+        }
+
+        if (
+            !trainingRunHasDataset[
+                modelTrainingRun[modelArtifactId]
+            ]
+        ) {
+            revert IncompleteModelProvenance(modelArtifactId);
+        }
+
+        // The model creator cannot approve their own model.
+        if (model.registeredBy == msg.sender) {
+            revert SelfApprovalNotAllowed();
+        }
+
+        if (evidenceHash == bytes32(0)) {
+            revert InvalidEvidenceHash();
+        }
+
+        ModelApproval storage approval =
+            modelApprovals[modelArtifactId];
+
+        if (approval.approved) {
+            revert ModelAlreadyApproved(modelArtifactId);
+        }
+
+        approval.approved = true;
+        approval.approvedBy = msg.sender;
+        approval.approvedAt = block.timestamp;
+        approval.evidenceHash = evidenceHash;
+        approval.revokedBy = address(0);
+        approval.revokedAt = 0;
+
+        emit ModelApproved(
+            modelArtifactId,
+            model.contentHash,
+            msg.sender,
+            evidenceHash,
+            block.timestamp
+        );
+    }
+
+
+    // =================================================
+    // 12. REVOKE MODEL APPROVAL
+    // =================================================
+
+    function revokeModelApproval(
+        bytes32 modelArtifactId
+    ) external {
+
+        _checkRole(AUDITOR_ROLE);
+
+        ModelApproval storage approval =
+            modelApprovals[modelArtifactId];
+
+        if (!approval.approved) {
+            revert ModelNotApproved(modelArtifactId);
+        }
+
+        approval.approved = false;
+        approval.revokedBy = msg.sender;
+        approval.revokedAt = block.timestamp;
+
+        emit ModelApprovalRevoked(
+            modelArtifactId,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+
+    // =================================================
+    // 13. RECORD DEPLOYMENT
+    // =================================================
+
+    function recordDeployment(
+        bytes32 containerImageId,
+        bytes32 deploymentArtifactId,
+        bytes32 deploymentHash
+    ) external {
+
+        _checkRole(DEPLOYMENT_OPERATOR_ROLE);
+
+        if (
+            containerImageId == bytes32(0) ||
+            deploymentArtifactId == bytes32(0)
+        ) {
+            revert InvalidArtifactId();
+        }
+
+        if (deploymentHash == bytes32(0)) {
+            revert InvalidContentHash();
+        }
+
+        Artifact memory container =
+            artifacts[containerImageId];
+
+        if (!container.exists) {
+            revert ArtifactNotFound(containerImageId);
+        }
+
+        if (container.artifactType != ArtifactType.ContainerImage) {
+            revert InvalidRelationship(
+                container.artifactType,
+                ArtifactType.Deployment,
+                RelationshipType.DeployedAs
+            );
+        }
+
+        // Retrieve the model associated with this container.
+        bytes32 modelArtifactId = containerModel[containerImageId];
+
+        if (modelArtifactId == bytes32(0)) {
+            revert ContainerNotLinkedToModel(containerImageId);
+        }
+
+        // The model must still have active approval.
+        if (!modelApprovals[modelArtifactId].approved) {
+            revert ModelNotApproved(modelArtifactId);
+        }
+
+        if (artifacts[deploymentArtifactId].exists) {
+            revert ArtifactAlreadyExists(deploymentArtifactId);
+        }
+
+        // Create the deployment artifact.
+        artifacts[deploymentArtifactId] = Artifact({
+            contentHash: deploymentHash,
+            artifactType: ArtifactType.Deployment,
+            registeredBy: msg.sender,
+            registeredAt: block.timestamp,
+            exists: true
+        });
+
+        // Create ContainerImage -> Deployment relationship.
+        provenanceLinks[containerImageId][deploymentArtifactId] =
+            ProvenanceLink({
+                relationshipType: RelationshipType.DeployedAs,
+                linkedBy: msg.sender,
+                linkedAt: block.timestamp,
+                exists: true
+            });
+
+        outgoingLinks[containerImageId].push(deploymentArtifactId);
+
+        emit ArtifactRegistered(
+            deploymentArtifactId,
+            ArtifactType.Deployment,
+            deploymentHash,
+            msg.sender,
+            block.timestamp
+        );
+
+        emit ArtifactLinked(
+            containerImageId,
+            deploymentArtifactId,
+            RelationshipType.DeployedAs,
+            msg.sender,
+            block.timestamp
+        );
+    }
+
+
+    // =================================================
+    // 14. READ FUNCTIONS
     // =================================================
 
     function getArtifact(
@@ -352,10 +631,6 @@ contract ChainTraceRegistry is AccessControl {
     }
 
 
-    // =================================================
-    // 14. VERIFY ARTIFACT HASH
-    // =================================================
-
     function verifyArtifact(
         bytes32 artifactId,
         bytes32 suppliedHash
@@ -370,10 +645,6 @@ contract ChainTraceRegistry is AccessControl {
         return artifact.contentHash == suppliedHash;
     }
 
-
-    // =================================================
-    // 15. RETRIEVE PROVENANCE LINK
-    // =================================================
 
     function getProvenanceLink(
         bytes32 sourceArtifactId,
@@ -394,10 +665,6 @@ contract ChainTraceRegistry is AccessControl {
     }
 
 
-    // =================================================
-    // 16. RETRIEVE OUTGOING LINKS
-    // =================================================
-
     function getOutgoingLinks(
         bytes32 artifactId
     ) external view returns (bytes32[] memory) {
@@ -407,6 +674,23 @@ contract ChainTraceRegistry is AccessControl {
         }
 
         return outgoingLinks[artifactId];
+    }
+
+
+    function getModelApproval(
+        bytes32 modelArtifactId
+    ) external view returns (ModelApproval memory) {
+
+        Artifact memory model = artifacts[modelArtifactId];
+
+        if (
+            !model.exists ||
+            model.artifactType != ArtifactType.Model
+        ) {
+            revert InvalidModelArtifact(modelArtifactId);
+        }
+
+        return modelApprovals[modelArtifactId];
     }
 
 }
