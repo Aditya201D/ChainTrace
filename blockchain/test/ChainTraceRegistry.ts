@@ -189,4 +189,118 @@ describe("ChainTraceRegistry - Role Based Access", function () {
             .to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount")
             .withArgs(await outsider.getAddress(), await registry.DEFAULT_ADMIN_ROLE());
     });
+
+    // ================================================
+    // PROVENANCE LINKING TESTS
+    // ================================================
+
+    it("Should create a complete artifact provenance chain", async function () {
+        const { registry, datasetProvider, modelDeveloper, deploymentOperator } = await deployRegistry();
+
+        // Register all five artifacts.
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
+
+        await registry.connect(modelDeveloper).registerArtifact(modelId, 2, correctHash);
+
+        await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
+
+        await registry.connect(deploymentOperator).registerArtifact(deploymentId, 4, correctHash);
+
+        // Dataset -> Training Run
+        await registry.connect(modelDeveloper).linkArtifacts(datasetId, trainingId, 0);
+
+        // Training Run -> Model
+        await registry.connect(modelDeveloper).linkArtifacts(trainingId, modelId, 1);
+
+        // Model -> Container Image
+        await registry.connect(deploymentOperator).linkArtifacts(modelId, containerId, 2);
+
+        // Container Image -> Deployment
+        await expect(registry.connect(deploymentOperator).linkArtifacts(containerId, deploymentId, 3)).to.emit(
+            registry,
+            "ArtifactLinked",
+        );
+
+        // Verify the first relationship.
+        const link = await registry.getProvenanceLink(datasetId, trainingId);
+
+        expect(Number(link.relationshipType)).to.equal(0);
+
+        expect(link.linkedBy).to.equal(await modelDeveloper.getAddress());
+
+        expect(link.exists).to.equal(true);
+
+        // Verify the outgoing links of the dataset.
+        const outgoing = await registry.getOutgoingLinks(datasetId);
+
+        expect(outgoing).to.deep.equal([trainingId]);
+    });
+
+    it("Should reject invalid artifact type relationships", async function () {
+        const { registry, datasetProvider, modelDeveloper } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        await registry.connect(modelDeveloper).registerArtifact(modelId, 2, correctHash);
+
+        // Dataset -> Model is not a permitted relationship.
+        await expect(
+            registry.connect(modelDeveloper).linkArtifacts(datasetId, modelId, 0),
+        ).to.be.revertedWithCustomError(registry, "InvalidRelationship");
+    });
+
+    it("Should reject unauthorized provenance linking", async function () {
+        const { registry, datasetProvider, modelDeveloper } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
+
+        // Dataset Provider cannot create training relationships.
+        await expect(
+            registry.connect(datasetProvider).linkArtifacts(datasetId, trainingId, 0),
+        ).to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount");
+    });
+
+    it("Should reject duplicate provenance links", async function () {
+        const { registry, datasetProvider, modelDeveloper } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
+
+        await registry.connect(modelDeveloper).linkArtifacts(datasetId, trainingId, 0);
+
+        await expect(registry.connect(modelDeveloper).linkArtifacts(datasetId, trainingId, 0))
+            .to.be.revertedWithCustomError(registry, "ProvenanceLinkAlreadyExists")
+            .withArgs(datasetId, trainingId);
+    });
+
+    it("Should reject linking an unregistered artifact", async function () {
+        const { registry, datasetProvider, modelDeveloper } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        const unknownId = ethers.id("unknown-training-run");
+
+        await expect(registry.connect(modelDeveloper).linkArtifacts(datasetId, unknownId, 0))
+            .to.be.revertedWithCustomError(registry, "ArtifactNotFound")
+            .withArgs(unknownId);
+    });
+
+    it("Should reject retrieval of a nonexistent provenance link", async function () {
+        const { registry, datasetProvider, modelDeveloper } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
+
+        await expect(registry.getProvenanceLink(datasetId, trainingId)).to.be.revertedWithCustomError(
+            registry,
+            "ProvenanceLinkNotFound",
+        );
+    });
 });
