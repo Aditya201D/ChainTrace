@@ -1,94 +1,192 @@
 import { expect } from "chai";
 import hre from "hardhat";
 
-// Create a local simulated blockchain for these tests.
 const { ethers } = await hre.network.create();
 
-describe("ChainTraceRegistry", function () {
+describe("ChainTraceRegistry - Role Based Access", function () {
     async function deployRegistry() {
+        const [admin, datasetProvider, modelDeveloper, auditor, deploymentOperator, outsider] =
+            await ethers.getSigners();
+
         const registry = await ethers.deployContract("ChainTraceRegistry");
 
         await registry.waitForDeployment();
 
-        return registry;
+        // Assign organizational roles.
+        await registry.grantRole(await registry.DATASET_PROVIDER_ROLE(), await datasetProvider.getAddress());
+
+        await registry.grantRole(await registry.MODEL_DEVELOPER_ROLE(), await modelDeveloper.getAddress());
+
+        await registry.grantRole(await registry.AUDITOR_ROLE(), await auditor.getAddress());
+
+        await registry.grantRole(await registry.DEPLOYMENT_OPERATOR_ROLE(), await deploymentOperator.getAddress());
+
+        return {
+            registry,
+            admin,
+            datasetProvider,
+            modelDeveloper,
+            auditor,
+            deploymentOperator,
+            outsider,
+        };
     }
 
-    // Generate a deterministic artifact identifier.
-    const artifactId = ethers.id("dataset:fraud-detection:v1");
+    const datasetId = ethers.id("dataset:fraud:v1");
+    const modelId = ethers.id("model:fraud:v1");
+    const trainingId = ethers.id("training:fraud:v1");
+    const containerId = ethers.id("container:fraud:v1");
+    const deploymentId = ethers.id("deployment:fraud:v1");
 
-    // Simulated SHA-256 digest (32 bytes).
     const correctHash = "0x" + "a".repeat(64);
-
     const wrongHash = "0x" + "b".repeat(64);
 
-    it("Should register an artifact successfully", async function () {
-        const registry = await deployRegistry();
+    // 1. Verify administrator role.
 
-        const [registrar] = await ethers.getSigners();
+    it("Should assign administrator role to deployer", async function () {
+        const { registry, admin } = await deployRegistry();
 
-        await expect(
-            registry.registerArtifact(
-                artifactId,
-                0, // Dataset
-                correctHash,
-            ),
-        ).to.emit(registry, "ArtifactRegistered");
+        expect(await registry.hasRole(await registry.DEFAULT_ADMIN_ROLE(), await admin.getAddress())).to.equal(true);
+    });
 
-        const artifact = await registry.getArtifact(artifactId);
+    // 2. Dataset provider permissions.
+
+    it("Dataset provider should register datasets", async function () {
+        const { registry, datasetProvider } = await deployRegistry();
+
+        await expect(registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash)).to.emit(
+            registry,
+            "ArtifactRegistered",
+        );
+
+        const artifact = await registry.getArtifact(datasetId);
 
         expect(artifact.contentHash).to.equal(correctHash);
 
-        expect(Number(artifact.artifactType)).to.equal(0);
-
-        expect(artifact.registeredBy).to.equal(await registrar.getAddress());
-
-        expect(artifact.exists).to.equal(true);
+        expect(artifact.registeredBy).to.equal(await datasetProvider.getAddress());
     });
 
-    it("Should verify a matching hash", async function () {
-        const registry = await deployRegistry();
+    // 3. Model developer permissions.
 
-        await registry.registerArtifact(artifactId, 0, correctHash);
+    it("Model developer should register training runs and models", async function () {
+        const { registry, modelDeveloper } = await deployRegistry();
 
-        const result = await registry.verifyArtifact(artifactId, correctHash);
+        await registry.connect(modelDeveloper).registerArtifact(trainingId, 1, correctHash);
 
-        expect(result).to.equal(true);
+        await registry.connect(modelDeveloper).registerArtifact(modelId, 2, correctHash);
+
+        expect((await registry.getArtifact(modelId)).exists).to.equal(true);
     });
 
-    it("Should reject a mismatching hash", async function () {
-        const registry = await deployRegistry();
+    // 4. Deployment operator permissions.
 
-        await registry.registerArtifact(artifactId, 0, correctHash);
+    it("Deployment operator should register containers and deployments", async function () {
+        const { registry, deploymentOperator } = await deployRegistry();
 
-        const result = await registry.verifyArtifact(artifactId, wrongHash);
+        await registry.connect(deploymentOperator).registerArtifact(containerId, 3, correctHash);
 
-        expect(result).to.equal(false);
+        await registry.connect(deploymentOperator).registerArtifact(deploymentId, 4, correctHash);
+
+        expect((await registry.getArtifact(deploymentId)).exists).to.equal(true);
     });
 
-    it("Should reject duplicate artifact registration", async function () {
-        const registry = await deployRegistry();
+    // 5. Unauthorized registration.
 
-        await registry.registerArtifact(artifactId, 0, correctHash);
+    it("Model developer should not register datasets", async function () {
+        const { registry, modelDeveloper } = await deployRegistry();
 
-        await expect(registry.registerArtifact(artifactId, 0, wrongHash))
-            .to.be.revertedWithCustomError(registry, "ArtifactAlreadyExists")
-            .withArgs(artifactId);
+        await expect(registry.connect(modelDeveloper).registerArtifact(datasetId, 0, correctHash))
+            .to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount")
+            .withArgs(await modelDeveloper.getAddress(), await registry.DATASET_PROVIDER_ROLE());
     });
 
-    it("Should reject an artifact with an empty hash", async function () {
-        const registry = await deployRegistry();
+    it("Outsider should not register any artifact", async function () {
+        const { registry, outsider } = await deployRegistry();
 
-        await expect(registry.registerArtifact(artifactId, 0, ethers.ZeroHash)).to.be.revertedWithCustomError(
+        await expect(
+            registry.connect(outsider).registerArtifact(datasetId, 0, correctHash),
+        ).to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount");
+    });
+
+    // 6. Auditor permissions.
+
+    it("Auditor should not register artifacts in this iteration", async function () {
+        const { registry, auditor } = await deployRegistry();
+
+        await expect(registry.connect(auditor).registerArtifact(modelId, 2, correctHash)).to.be.revertedWithCustomError(
             registry,
-            "InvalidContentHash",
+            "AccessControlUnauthorizedAccount",
         );
     });
 
+    // 7. Role revocation.
+
+    it("Administrator should be able to revoke a role", async function () {
+        const { registry, admin, datasetProvider } = await deployRegistry();
+
+        const role = await registry.DATASET_PROVIDER_ROLE();
+
+        await registry.connect(admin).revokeRole(role, await datasetProvider.getAddress());
+
+        expect(await registry.hasRole(role, await datasetProvider.getAddress())).to.equal(false);
+
+        await expect(
+            registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash),
+        ).to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount");
+    });
+
+    // 8. Duplicate registration.
+
+    it("Should reject duplicate artifact registration", async function () {
+        const { registry, datasetProvider } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        await expect(registry.connect(datasetProvider).registerArtifact(datasetId, 0, wrongHash))
+            .to.be.revertedWithCustomError(registry, "ArtifactAlreadyExists")
+            .withArgs(datasetId);
+    });
+
+    // 9. Hash validation.
+
+    it("Should reject an empty content hash", async function () {
+        const { registry, datasetProvider } = await deployRegistry();
+
+        await expect(
+            registry.connect(datasetProvider).registerArtifact(datasetId, 0, ethers.ZeroHash),
+        ).to.be.revertedWithCustomError(registry, "InvalidContentHash");
+    });
+
+    // 10. Hash verification.
+
+    it("Should verify a matching hash and reject a different hash", async function () {
+        const { registry, datasetProvider } = await deployRegistry();
+
+        await registry.connect(datasetProvider).registerArtifact(datasetId, 0, correctHash);
+
+        expect(await registry.verifyArtifact(datasetId, correctHash)).to.equal(true);
+
+        expect(await registry.verifyArtifact(datasetId, wrongHash)).to.equal(false);
+    });
+
+    // 11. Unknown artifact.
+
     it("Should reject retrieval of an unknown artifact", async function () {
-        const registry = await deployRegistry();
+        const { registry } = await deployRegistry();
 
-        const unknownId = ethers.id("unknown-dataset");
+        await expect(registry.getArtifact(ethers.id("unknown-artifact"))).to.be.revertedWithCustomError(
+            registry,
+            "ArtifactNotFound",
+        );
+    });
 
-        await expect(registry.getArtifact(unknownId)).to.be.revertedWithCustomError(registry, "ArtifactNotFound");
+    it("Only administrator should be able to grant roles", async function () {
+        const { registry, outsider, datasetProvider } = await deployRegistry();
+
+        const role = await registry.DATASET_PROVIDER_ROLE();
+
+        await expect(registry.connect(outsider).grantRole(role, await datasetProvider.getAddress()))
+            .to.be.revertedWithCustomError(registry, "AccessControlUnauthorizedAccount")
+            .withArgs(await outsider.getAddress(), await registry.DEFAULT_ADMIN_ROLE());
     });
 });
