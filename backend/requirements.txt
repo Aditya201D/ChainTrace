@@ -1,0 +1,5 @@
+fastapi[standard]
+web3
+sqlalchemy
+python-multipart
+python-dotenv
