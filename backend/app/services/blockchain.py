@@ -1,4 +1,3 @@
-
 import json
 
 from web3 import Web3
@@ -10,6 +9,9 @@ from app.config import (
     CONTRACT_ADDRESS,
     CONTRACT_ARTIFACT_PATH
 )
+
+from web3.logs import DISCARD
+from web3.exceptions import TransactionNotFound
 
 
 class BlockchainService:
@@ -150,6 +152,190 @@ class BlockchainService:
             Web3.to_bytes(hexstr=artifact_id_bytes32),
             Web3.to_bytes(hexstr=content_hash_bytes32)
         ).call()
+
+    
+    # ================================================
+    # PREPARE ARTIFACT REGISTRATION
+    # ================================================
+
+    def prepare_artifact_registration(
+        self,
+        artifact_id_bytes32: str,
+        artifact_type_code: int,
+        content_hash_bytes32: str,
+        registrar_address: str
+    ) -> dict:
+
+        if not Web3.is_address(registrar_address):
+            raise ValueError("Invalid registrar address.")
+
+        def decode_bytes32(value: str) -> bytes:
+
+            if (
+                not isinstance(value, str)
+                or len(value) != 66
+                or not value.startswith("0x")
+            ):
+                raise ValueError("Invalid bytes32 value.")
+
+            try:
+                result = bytes.fromhex(value[2:])
+            except ValueError as exc:
+                raise ValueError("Invalid hexadecimal value.") from exc
+
+            if len(result) != 32:
+                raise ValueError("Expected exactly 32 bytes.")
+
+            return result
+
+        artifact_id = decode_bytes32(artifact_id_bytes32)
+        content_hash = decode_bytes32(content_hash_bytes32)
+
+        if artifact_type_code not in range(5):
+            raise ValueError("Unsupported artifact type.")
+
+        contract = self.get_contract()
+
+        registrar = Web3.to_checksum_address(
+            registrar_address
+        )
+
+        function = contract.functions.registerArtifact(
+            artifact_id,
+            artifact_type_code,
+            content_hash
+        )
+
+        try:
+
+            # Simulate the transaction first.
+            # This checks role permissions and contract rules
+            # without changing blockchain state.
+            function.call({
+                "from": registrar
+            })
+
+            # Build an unsigned transaction.
+            prepared = function.build_transaction({
+                "from": registrar,
+                "chainId": self.w3.eth.chain_id,
+                "value": 0
+            })
+
+        except ContractLogicError as exc:
+
+            raise PermissionError(
+                "The smart contract rejected this registration. "
+                "Check the registrar's role and artifact state."
+            ) from exc
+
+        return {
+            "from": registrar,
+            "to": Web3.to_checksum_address(contract.address),
+            "data": prepared["data"],
+            "value": "0x0",
+            "chain_id": self.w3.eth.chain_id
+        }
+
+
+    # ================================================
+    # CONFIRM ARTIFACT REGISTRATION
+    # ================================================
+
+    def confirm_artifact_registration(
+        self,
+        tx_hash: str,
+        expected_artifact_id: str,
+        expected_artifact_type: int,
+        expected_content_hash: str
+    ) -> dict:
+
+        contract = self.get_contract()
+
+        # Retrieve the transaction and its receipt.
+        transaction = self.w3.eth.get_transaction(tx_hash)
+
+        receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+
+        if receipt["status"] != 1:
+            raise ValueError("Blockchain transaction failed.")
+
+        # Make sure the transaction targeted our contract.
+        if (
+            transaction["to"] is None
+            or Web3.to_checksum_address(transaction["to"])
+            != Web3.to_checksum_address(contract.address)
+        ):
+            raise ValueError(
+                "Transaction was not sent to the ChainTrace contract."
+            )
+
+        # Decode ArtifactRegistered events.
+        events = contract.events.ArtifactRegistered().process_receipt(
+            receipt,
+            errors=DISCARD
+        )
+
+        # Find an event corresponding to this artifact.
+        matching_events = []
+
+        for event in events:
+
+            args = event["args"]
+
+            event_id = Web3.to_hex(
+                args["artifactId"]
+            ).lower()
+
+            if event_id == expected_artifact_id.lower():
+                matching_events.append(event)
+
+        if len(matching_events) != 1:
+            raise ValueError(
+                "Expected exactly one matching ArtifactRegistered event."
+            )
+
+        args = matching_events[0]["args"]
+
+        event_hash = Web3.to_hex(
+            args["contentHash"]
+        ).lower()
+
+        event_type = int(args["artifactType"])
+
+        registered_by = Web3.to_checksum_address(
+            args["registeredBy"]
+        )
+
+        transaction_sender = Web3.to_checksum_address(
+            transaction["from"]
+        )
+
+        # Validate the actual blockchain event against
+        # our locally stored artifact metadata.
+
+        if event_hash != expected_content_hash.lower():
+            raise ValueError("Registered hash does not match the artifact.")
+
+        if event_type != expected_artifact_type:
+            raise ValueError("Registered artifact type does not match.")
+
+        if registered_by != transaction_sender:
+            raise ValueError("Transaction sender mismatch.")
+
+        return {
+            "transaction_hash": Web3.to_hex(
+                receipt["transactionHash"]
+            ),
+            "block_number": int(receipt["blockNumber"]),
+            "registered_by": registered_by,
+            "registered_at": int(args["registeredAt"]),
+            "artifact_id": Web3.to_hex(args["artifactId"]),
+            "content_hash": event_hash,
+            "artifact_type": event_type,
+            "transaction_status": "confirmed"
+        }
+
 
 
 blockchain_service = BlockchainService()

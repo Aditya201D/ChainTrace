@@ -3,3 +3,4 @@ web3
 sqlalchemy
 python-multipart
 python-dotenv
+requests
