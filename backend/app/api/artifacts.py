@@ -16,6 +16,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from web3 import Web3
+from web3.exceptions import ContractLogicError
+
+from app.services.blockchain import blockchain_service
 
 from app.config import STORAGE_ROOT
 from app.core.database import get_db
@@ -213,4 +216,125 @@ def verify_artifact_storage(
         "artifact_id": artifact_id,
         "original_hash": record.sha256_hex,
         **result
+    }
+
+
+# ================================================
+# 4. UNIFIED ARTIFACT VERIFICATION
+# ================================================
+
+@router.get("/{artifact_id}/verify")
+def verify_artifact(
+    artifact_id: str,
+    db: Session = Depends(get_db)
+):
+
+    # Step 1: Retrieve artifact metadata.
+    record = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == artifact_id
+        )
+    )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Artifact not found."
+        )
+
+    # Step 2: Verify the actual stored file.
+    try:
+
+        local_result = verify_stored_file(
+            record.storage_key,
+            record.sha256_hex
+        )
+
+    except ValueError as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
+
+    # Step 3: Check the blockchain record.
+    try:
+
+        chain_result = blockchain_service.get_artifact(
+            record.artifact_id_bytes32
+        )
+
+    except ContractLogicError:
+
+        chain_result = None
+
+    except (ConnectionError, RuntimeError, FileNotFoundError) as exc:
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Blockchain unavailable: {exc}"
+        )
+
+    # Step 4: Compare hashes.
+    database_hash = record.sha256_hex.lower()
+
+    actual_hash = (
+        local_result["actual_hash"].lower()
+        if local_result["actual_hash"]
+        else None
+    )
+
+    local_matches = (
+        actual_hash == database_hash
+        if actual_hash is not None
+        else False
+    )
+
+    blockchain_exists = (
+        chain_result is not None
+        and chain_result["exists"]
+    )
+
+    blockchain_hash = (
+        chain_result["content_hash"].lower()
+        if blockchain_exists
+        else None
+    )
+
+    blockchain_matches = (
+        blockchain_hash == record.content_hash_bytes32.lower()
+        if blockchain_hash is not None
+        else False
+    )
+
+    # Step 5: Determine overall verification status.
+    verified = all([
+        local_result["file_exists"],
+        local_matches,
+        blockchain_exists,
+        blockchain_matches
+    ])
+
+    return {
+        "artifact_id": record.artifact_id,
+
+        "verification": {
+            "file_exists": local_result["file_exists"],
+            "local_hash_matches_database": local_matches,
+            "blockchain_record_exists": blockchain_exists,
+            "blockchain_hash_matches_database": blockchain_matches,
+            "overall_verified": verified
+        },
+
+        "hashes": {
+            "database_hash": database_hash,
+            "local_file_hash": actual_hash,
+            "blockchain_hash": blockchain_hash
+        },
+
+        "message": (
+            "Artifact integrity verified successfully."
+            if verified
+            else "Artifact integrity verification failed."
+        )
     }
