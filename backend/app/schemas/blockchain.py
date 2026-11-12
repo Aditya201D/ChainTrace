@@ -35,3 +35,11 @@ class ConfirmModelLinkRequest(BaseModel):
     training_run_id: str = Field(...)
     model_artifact_id: str = Field(...)
     tx_hash: str = Field(...)
+
+class PrepareModelApprovalRequest(BaseModel):
+    auditor_address: str
+    evidence_hash: str
+
+
+class ConfirmModelApprovalRequest(BaseModel):
+    tx_hash: str

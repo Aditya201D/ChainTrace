@@ -1,0 +1,7 @@
+{
+  "model_id": "model:b752d2cb4ba34d518bd078f7d9165612",
+  "audit_type": "integration_test",
+  "decision": "approve",
+  "scope": "blockchain approval workflow only",
+  "limitations": "No independent evaluation of model quality, safety, fairness, or training execution."
+}

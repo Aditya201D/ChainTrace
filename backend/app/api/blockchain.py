@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from web3 import Web3
 from web3.exceptions import TransactionNotFound
 from web3.exceptions import ContractLogicError
+from web3.logs import DISCARD
 
 from app.core.database import get_db
 from app.models.artifact import ArtifactRecord
@@ -21,7 +22,9 @@ from app.schemas.blockchain import (
     PrepareTrainingLinkRequest,
     ConfirmTrainingLinkRequest,
     PrepareModelLinkRequest,
-    ConfirmModelLinkRequest
+    ConfirmModelLinkRequest,
+    PrepareModelApprovalRequest,
+    ConfirmModelApprovalRequest
 )
 
 from app.services.blockchain import blockchain_service
@@ -828,5 +831,201 @@ def get_model_provenance(
         ConnectionError,
         RuntimeError,
         FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+# ================================================
+# 14. AUDITOR APPROVAL
+# ================================================
+
+def get_approval_model(db: Session, model_id: str):
+    record = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == model_id
+        )
+    )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Model artifact not found."
+        )
+
+    if record.artifact_type != ArtifactType.MODEL.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Artifact must be a Model."
+        )
+
+    if not record.chain_registered:
+        raise HTTPException(
+            status_code=409,
+            detail="Model is not registered on-chain."
+        )
+
+    return record
+
+
+@router.post("/audit/models/{model_id}/prepare-approval")
+def prepare_model_approval(
+    model_id: str,
+    request: PrepareModelApprovalRequest,
+    db: Session = Depends(get_db)
+):
+    record = get_approval_model(db, model_id)
+
+    try:
+        chain_record = blockchain_service.get_artifact(
+            record.artifact_id_bytes32
+        )
+
+        if (
+            not chain_record["exists"]
+            or chain_record["artifact_type"] != 2
+            or chain_record["content_hash"].lower()
+            != record.content_hash_bytes32.lower()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="On-chain model metadata mismatch."
+            )
+
+        transaction = blockchain_service.prepare_model_approval(
+            model_id=record.artifact_id_bytes32,
+            evidence_hash=request.evidence_hash,
+            auditor_address=request.auditor_address
+        )
+
+        return {
+            "model_id": record.artifact_id,
+            "evidence_hash": request.evidence_hash,
+            "transaction": transaction,
+            "message": "Approval transaction prepared."
+        }
+
+    except HTTPException:
+        raise
+
+    except ContractLogicError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/audit/models/{model_id}/confirm-approval")
+def confirm_model_approval(
+    model_id: str,
+    request: ConfirmModelApprovalRequest,
+    db: Session = Depends(get_db)
+):
+    record = get_approval_model(db, model_id)
+
+    if not (
+        request.tx_hash.startswith("0x")
+        and len(request.tx_hash) == 66
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid transaction hash."
+        )
+
+    try:
+        bytes.fromhex(request.tx_hash[2:])
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid hexadecimal transaction hash."
+        )
+
+    try:
+        # The event supplies the evidence hash. Retrieve it
+        # from the receipt, then validate the complete event.
+        contract = blockchain_service.get_contract()
+        receipt = blockchain_service.w3.eth.get_transaction_receipt(
+            request.tx_hash
+        )
+
+        events = contract.events.ModelApproved().process_receipt(
+            receipt,
+            errors=DISCARD
+        )
+
+        matching = [
+            event for event in events
+            if Web3.to_hex(
+                event["args"]["modelArtifactId"]
+            ).lower() == record.artifact_id_bytes32.lower()
+        ]
+
+        if len(matching) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail="Matching approval event not found."
+            )
+
+        evidence_hash = Web3.to_hex(
+            matching[0]["args"]["evidenceHash"]
+        )
+
+        result = blockchain_service.confirm_model_approval(
+            tx_hash=request.tx_hash,
+            expected_model_id=record.artifact_id_bytes32,
+            expected_model_hash=record.content_hash_bytes32,
+            expected_evidence_hash=evidence_hash
+        )
+
+        return {
+            "model_id": record.artifact_id,
+            "verification": result,
+            "message": "Approval transaction verified."
+        }
+
+    except HTTPException:
+        raise
+
+    except TransactionNotFound:
+        raise HTTPException(
+            status_code=409,
+            detail="Transaction not mined yet."
+        )
+
+    except (ContractLogicError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/audit/models/{model_id}/status")
+def get_model_audit_status(
+    model_id: str,
+    db: Session = Depends(get_db)
+):
+    record = get_approval_model(db, model_id)
+
+    try:
+        result = blockchain_service.get_model_approval(
+            record.artifact_id_bytes32
+        )
+
+        return {
+            "model_id": record.artifact_id,
+            "approval": result
+        }
+
+    except ContractLogicError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
     ) as exc:
         raise HTTPException(status_code=503, detail=str(exc))

@@ -607,4 +607,159 @@ class BlockchainService:
             for linked_id in linked_ids
         ]
 
+    
+    # ================================================
+    # AUDITOR APPROVAL
+    # ================================================
+
+    def get_model_approval(self, model_id: str) -> dict:
+        model_bytes = self._decode_bytes32(
+            model_id, "model artifact ID"
+        )
+
+        result = self.get_contract().functions.getModelApproval(
+            model_bytes
+        ).call()
+
+        return {
+            "approved": bool(result[0]),
+            "approved_by": Web3.to_checksum_address(result[1]),
+            "approved_at": int(result[2]),
+            "evidence_hash": Web3.to_hex(result[3]),
+            "revoked_by": Web3.to_checksum_address(result[4]),
+            "revoked_at": int(result[5])
+        }
+
+
+    def prepare_model_approval(
+        self,
+        model_id: str,
+        evidence_hash: str,
+        auditor_address: str
+    ) -> dict:
+        model_bytes = self._decode_bytes32(
+            model_id, "model artifact ID"
+        )
+
+        evidence_bytes = self._decode_bytes32(
+            evidence_hash, "evidence hash"
+        )
+
+        if evidence_bytes == bytes(32):
+            raise ValueError("Evidence hash cannot be zero.")
+
+        if not Web3.is_address(auditor_address):
+            raise ValueError("Invalid auditor address.")
+
+        auditor = Web3.to_checksum_address(auditor_address)
+        contract = self.get_contract()
+
+        function = contract.functions.approveModel(
+            model_bytes,
+            evidence_bytes
+        )
+
+        try:
+            # Simulate before requesting a signature.
+            function.call({"from": auditor})
+
+            transaction = function.build_transaction({
+                "from": auditor,
+                "chainId": self.w3.eth.chain_id,
+                "value": 0
+            })
+
+        except ContractLogicError as exc:
+            raise ValueError(
+                f"Contract rejected model approval: {exc}"
+            ) from exc
+
+        return {
+            "from": auditor,
+            "to": contract.address,
+            "data": transaction["data"],
+            "value": "0x0",
+            "chain_id": self.w3.eth.chain_id
+        }
+
+
+    def confirm_model_approval(
+        self,
+        tx_hash: str,
+        expected_model_id: str,
+        expected_model_hash: str,
+        expected_evidence_hash: str
+    ) -> dict:
+        model_bytes = self._decode_bytes32(
+            expected_model_id, "model artifact ID"
+        )
+        model_hash = self._decode_bytes32(
+            expected_model_hash, "model hash"
+        )
+        evidence_hash = self._decode_bytes32(
+            expected_evidence_hash, "evidence hash"
+        )
+
+        contract = self.get_contract()
+
+        transaction = self.w3.eth.get_transaction(tx_hash)
+        receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+
+        if receipt["status"] != 1:
+            raise ValueError("Approval transaction failed.")
+
+        if (
+            transaction["to"] is None
+            or Web3.to_checksum_address(transaction["to"])
+            != Web3.to_checksum_address(contract.address)
+        ):
+            raise ValueError("Incorrect contract destination.")
+
+        events = contract.events.ModelApproved().process_receipt(
+            receipt,
+            errors=DISCARD
+        )
+
+        matching = []
+
+        for event in events:
+            args = event["args"]
+
+            if (
+                bytes(args["modelArtifactId"]) == model_bytes
+                and bytes(args["modelHash"]) == model_hash
+                and bytes(args["evidenceHash"]) == evidence_hash
+                and Web3.to_checksum_address(args["approvedBy"])
+                == Web3.to_checksum_address(transaction["from"])
+            ):
+                matching.append(event)
+
+        if len(matching) != 1:
+            raise ValueError(
+                "Expected exactly one matching ModelApproved event."
+            )
+
+        args = matching[0]["args"]
+
+        # An approval may subsequently be revoked.
+        # This method confirms the historical transaction,
+        # while the status endpoint reports current state.
+        return {
+            "transaction_hash": Web3.to_hex(
+                receipt["transactionHash"]
+            ),
+            "block_number": int(receipt["blockNumber"]),
+            "model_artifact_id": Web3.to_hex(
+                args["modelArtifactId"]
+            ),
+            "model_hash": Web3.to_hex(args["modelHash"]),
+            "evidence_hash": Web3.to_hex(args["evidenceHash"]),
+            "approved_by": Web3.to_checksum_address(
+                args["approvedBy"]
+            ),
+            "approved_at": int(args["approvedAt"]),
+            "transaction_status": "confirmed"
+        }
+
+
 blockchain_service = BlockchainService()
