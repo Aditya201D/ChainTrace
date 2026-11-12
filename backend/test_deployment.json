@@ -1,0 +1,9 @@
+{
+  "artifact_type": "Deployment",
+  "name": "chaintrace-test-deployment",
+  "environment": "local-hardhat-integration-test",
+  "container_artifact_id": "containerimage:ef16fae1abe94616af6c0ac9bcf72c56",
+  "endpoint_url": null,
+  "status": "metadata_only_integration_test",
+  "description": "Simulated deployment record. No live model-serving service was deployed."
+}
