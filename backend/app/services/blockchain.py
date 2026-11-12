@@ -586,4 +586,25 @@ class BlockchainService:
             "exists": bool(result[3])
         }
 
+    def get_outgoing_links(
+        self,
+        artifact_id_bytes32: str
+    ) -> list[str]:
+
+        artifact_id = self._decode_bytes32(
+            artifact_id_bytes32,
+            "artifact ID"
+        )
+
+        contract = self.get_contract()
+
+        linked_ids = contract.functions.getOutgoingLinks(
+            artifact_id
+        ).call()
+
+        return [
+            Web3.to_hex(linked_id)
+            for linked_id in linked_ids
+        ]
+
 blockchain_service = BlockchainService()

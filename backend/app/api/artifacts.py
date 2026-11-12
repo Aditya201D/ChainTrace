@@ -338,3 +338,231 @@ def verify_artifact(
             else "Artifact integrity verification failed."
         )
     }
+
+
+# ================================================
+# 5. UNIFIED MODEL PROVENANCE VERIFICATION
+# ================================================
+
+@router.get("/{model_id}/provenance")
+def verify_model_provenance(
+    model_id: str,
+    db: Session = Depends(get_db)
+):
+    model = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == model_id
+        )
+    )
+
+    if model is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Model artifact not found."
+        )
+
+    if model.artifact_type != ArtifactType.MODEL.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Artifact must be a Model."
+        )
+
+    # Verify a single artifact against its stored file,
+    # database metadata, and on-chain registration.
+    def check_artifact(record):
+        local = verify_stored_file(
+            record.storage_key,
+            record.sha256_hex
+        )
+
+        actual_hash = local.get("actual_hash")
+        local_matches = (
+            actual_hash is not None
+            and actual_hash.lower() == record.sha256_hex.lower()
+        )
+
+        chain_record = None
+
+        try:
+            chain_record = blockchain_service.get_artifact(
+                record.artifact_id_bytes32
+            )
+        except ContractLogicError:
+            pass
+
+        artifact_type = ArtifactType(record.artifact_type)
+        expected_type = ARTIFACT_TYPE_CODES[artifact_type]
+
+        chain_matches = (
+            chain_record is not None
+            and chain_record["exists"]
+            and chain_record["artifact_type"] == expected_type
+            and chain_record["content_hash"].lower()
+                == record.content_hash_bytes32.lower()
+        )
+
+        return {
+            "artifact_id": record.artifact_id,
+            "artifact_type": record.artifact_type,
+            "file_exists": local["file_exists"],
+            "local_hash_matches": local_matches,
+            "blockchain_record_matches": chain_matches,
+            "verified": bool(
+                local["file_exists"]
+                and local_matches
+                and chain_matches
+            )
+        }
+
+    # Use the contract as the authority for relationships.
+    # SQLite supplies the known human-readable artifact IDs.
+    def linked_targets(source_record):
+        try:
+            return {
+                item.lower()
+                for item in blockchain_service.get_outgoing_links(
+                    source_record.artifact_id_bytes32
+                )
+            }
+        except ContractLogicError:
+            return set()
+
+    try:
+        model_result = check_artifact(model)
+
+        # Discover registered TrainingRuns that point to this Model.
+        training_runs = db.scalars(
+            select(ArtifactRecord).where(
+                ArtifactRecord.artifact_type
+                == ArtifactType.TRAINING_RUN.value,
+                ArtifactRecord.chain_registered.is_(True)
+            )
+        ).all()
+
+        matching_runs = []
+
+        for run in training_runs:
+            outgoing = linked_targets(run)
+
+            if model.artifact_id_bytes32.lower() in outgoing:
+                matching_runs.append(run)
+
+        # The contract permits only one producing TrainingRun.
+        if len(matching_runs) != 1:
+            return {
+                "model_id": model.artifact_id,
+                "model": model_result,
+                "training_run": None,
+                "datasets": [],
+                "relationships": [],
+                "overall_verified": False,
+                "message": (
+                    "Expected exactly one producing TrainingRun; "
+                    f"found {len(matching_runs)}."
+                )
+            }
+
+        training_run = matching_runs[0]
+
+        training_result = check_artifact(training_run)
+
+        produced_link = blockchain_service.get_provenance_link(
+            training_run.artifact_id_bytes32,
+            model.artifact_id_bytes32
+        )
+
+        produced_verified = (
+            produced_link["exists"]
+            and produced_link["relationship_type"] == 1
+        )
+
+        relationships = [{
+            "source": training_run.artifact_id,
+            "target": model.artifact_id,
+            "relationship": "Produced",
+            "verified": produced_verified
+        }]
+
+        # Find all registered datasets linked to the TrainingRun.
+        datasets = db.scalars(
+            select(ArtifactRecord).where(
+                ArtifactRecord.artifact_type
+                == ArtifactType.DATASET.value,
+                ArtifactRecord.chain_registered.is_(True)
+            )
+        ).all()
+
+        dataset_results = []
+
+        for dataset in datasets:
+            outgoing = linked_targets(dataset)
+
+            if (
+                training_run.artifact_id_bytes32.lower()
+                not in outgoing
+            ):
+                continue
+
+            dataset_result = check_artifact(dataset)
+            dataset_results.append(dataset_result)
+
+            dataset_link = blockchain_service.get_provenance_link(
+                dataset.artifact_id_bytes32,
+                training_run.artifact_id_bytes32
+            )
+
+            link_verified = (
+                dataset_link["exists"]
+                and dataset_link["relationship_type"] == 0
+            )
+
+            relationships.append({
+                "source": dataset.artifact_id,
+                "target": training_run.artifact_id,
+                "relationship": "UsedForTraining",
+                "verified": link_verified
+            })
+
+        # All discovered artifacts and relationships
+        # must pass verification, and at least one
+        # dataset must be linked to the TrainingRun.
+        artifacts_verified = all([
+            model_result["verified"],
+            training_result["verified"],
+            len(dataset_results) > 0,
+            all(item["verified"] for item in dataset_results)
+        ])
+
+        relationships_verified = all(
+            item["verified"] for item in relationships
+        )
+
+        overall_verified = (
+            artifacts_verified and relationships_verified
+        )
+
+        return {
+            "model_id": model.artifact_id,
+            "model": model_result,
+            "training_run": training_result,
+            "datasets": dataset_results,
+            "relationships": relationships,
+            "overall_verified": overall_verified,
+            "message": (
+                "Model provenance verified successfully."
+                if overall_verified
+                else "Model provenance verification failed."
+            )
+        }
+
+    except ContractLogicError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"On-chain provenance lookup failed: {exc}"
+        )
+
+    except (ConnectionError, RuntimeError, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Blockchain unavailable: {exc}"
+        )
