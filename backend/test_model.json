@@ -1,0 +1,17 @@
+{
+  "model_name": "chaintrace-integration-test-model",
+  "model_version": "1.0.0",
+  "artifact_type": "Model",
+  "model_format": "json",
+  "execution_status": "metadata_only_integration_test",
+  "training_run": {
+    "artifact_id": "trainingrun:cc433ecd87ec4c67be605d7e134ebb83"
+  },
+  "model_metadata": {
+    "algorithm": "Not executed",
+    "framework": null,
+    "metrics": {},
+    "weights_available": false
+  },
+  "description": "Test model artifact for validating ChainTrace provenance relationships. No actual model training was performed."
+}

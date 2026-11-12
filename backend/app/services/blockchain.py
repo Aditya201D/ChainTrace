@@ -367,8 +367,12 @@ class BlockchainService:
         self,
         source_artifact_id: str,
         target_artifact_id: str,
-        registrar_address: str
+        registrar_address: str,
+        relationship_type: int = 0
     ) -> dict:
+        
+        if relationship_type not in (0, 1):
+            raise ValueError("Unsupported relationship type.")
 
         # Validate identifiers.
         source_id = self._decode_bytes32(
@@ -395,7 +399,7 @@ class BlockchainService:
         function = contract.functions.linkArtifacts(
             source_id,
             target_id,
-            0
+            relationship_type
         )
 
         try:
@@ -433,8 +437,12 @@ class BlockchainService:
         self,
         tx_hash: str,
         expected_source_id: str,
-        expected_target_id: str
+        expected_target_id: str,
+        relationship_type: int = 0
     ) -> dict:
+
+        if relationship_type not in (0, 1):
+            raise ValueError("Unsupported relationship type.")
 
         contract = self.get_contract()
 
@@ -486,12 +494,12 @@ class BlockchainService:
                 primitive=args["targetArtifactId"]
             )
 
-            relationship_type = int(args["relationshipType"])
+            event_relationship_type = int(args["relationshipType"])
 
             if (
                 event_source == source_id
                 and event_target == target_id
-                and relationship_type == 0
+                and event_relationship_type == relationship_type
             ):
                 matching_events.append(event)
 
@@ -524,7 +532,9 @@ class BlockchainService:
             "target_artifact_id": Web3.to_hex(
                 args["targetArtifactId"]
             ),
-            "relationship_type": "UsedForTraining",
+            "relationship_type": (
+                "UsedForTraining" if relationship_type == 0 else "Produced"
+            ),
             "linked_by": linked_by,
             "linked_at": int(args["linkedAt"]),
             "transaction_status": "confirmed"
