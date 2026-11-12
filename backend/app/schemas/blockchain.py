@@ -13,3 +13,14 @@ class ConfirmRegistrationRequest(BaseModel):
         ...,
         description="Hash of the submitted blockchain transaction."
     )
+
+class PrepareTrainingLinkRequest(BaseModel):
+    source_artifact_id: str = Field(...)
+    target_artifact_id: str = Field(...)
+    registrar_address: str = Field(...)
+
+
+class ConfirmTrainingLinkRequest(BaseModel):
+    source_artifact_id: str = Field(...)
+    target_artifact_id: str = Field(...)
+    tx_hash: str = Field(...)

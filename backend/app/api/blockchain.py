@@ -17,7 +17,9 @@ from app.schemas.artifact import (
 
 from app.schemas.blockchain import (
     PrepareRegistrationRequest,
-    ConfirmRegistrationRequest
+    ConfirmRegistrationRequest,
+    PrepareTrainingLinkRequest,
+    ConfirmTrainingLinkRequest
 )
 
 from app.services.blockchain import blockchain_service
@@ -323,6 +325,252 @@ def verify_on_chain_artifact(
         )
 
     except (ConnectionError, RuntimeError, FileNotFoundError) as exc:
+
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc)
+        )
+
+# ================================================
+# 6. TRAINING PROVENANCE — HELPER
+# ================================================
+
+def get_training_pair(
+    db: Session,
+    source_artifact_id: str,
+    target_artifact_id: str
+):
+
+    source = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == source_artifact_id
+        )
+    )
+
+    target = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == target_artifact_id
+        )
+    )
+
+    if source is None or target is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Source or target artifact not found."
+        )
+
+    if source.artifact_type != ArtifactType.DATASET.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Source artifact must be a Dataset."
+        )
+
+    if target.artifact_type != ArtifactType.TRAINING_RUN.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Target artifact must be a TrainingRun."
+        )
+
+    if not source.chain_registered or not target.chain_registered:
+        raise HTTPException(
+            status_code=409,
+            detail="Both artifacts must be registered on blockchain."
+        )
+
+    return source, target
+
+
+# ================================================
+# 7. PREPARE DATASET → TRAINING RUN LINK
+# ================================================
+
+@router.post("/provenance/prepare-training-link")
+def prepare_training_link(
+    request: PrepareTrainingLinkRequest,
+    db: Session = Depends(get_db)
+):
+
+    source, target = get_training_pair(
+        db,
+        request.source_artifact_id,
+        request.target_artifact_id
+    )
+
+    try:
+
+        # Verify that the on-chain records match the database.
+        for record, expected_type in [
+            (source, ARTIFACT_TYPE_CODES[ArtifactType.DATASET]),
+            (target, ARTIFACT_TYPE_CODES[ArtifactType.TRAINING_RUN])
+        ]:
+
+            chain_record = blockchain_service.get_artifact(
+                record.artifact_id_bytes32
+            )
+
+            if (
+                not chain_record["exists"]
+                or chain_record["artifact_type"] != expected_type
+                or chain_record["content_hash"].lower()
+                != record.content_hash_bytes32.lower()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "On-chain artifact metadata does not "
+                        "match the database."
+                    )
+                )
+
+        transaction = blockchain_service.prepare_training_link(
+            source_artifact_id=source.artifact_id_bytes32,
+            target_artifact_id=target.artifact_id_bytes32,
+            registrar_address=request.registrar_address
+        )
+
+        return {
+            "source_artifact_id": source.artifact_id,
+            "target_artifact_id": target.artifact_id,
+            "relationship": "UsedForTraining",
+            "transaction": transaction,
+            "message": "Provenance transaction prepared."
+        }
+
+    except HTTPException:
+        raise
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc)
+        )
+
+    except (
+        ConnectionError,
+        RuntimeError,
+        FileNotFoundError
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc)
+        )
+
+
+# ================================================
+# 8. CONFIRM DATASET → TRAINING RUN LINK
+# ================================================
+
+@router.post("/provenance/confirm-training-link")
+def confirm_training_link(
+    request: ConfirmTrainingLinkRequest,
+    db: Session = Depends(get_db)
+):
+
+    # Validate transaction hash.
+    if (
+        not request.tx_hash.startswith("0x")
+        or len(request.tx_hash) != 66
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid transaction hash."
+        )
+
+    try:
+        bytes.fromhex(request.tx_hash[2:])
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid hexadecimal transaction hash."
+        )
+
+    source, target = get_training_pair(
+        db,
+        request.source_artifact_id,
+        request.target_artifact_id
+    )
+
+    tx_hash = Web3.to_hex(
+        Web3.to_bytes(hexstr=request.tx_hash)
+    )
+
+    try:
+
+        verification = blockchain_service.confirm_training_link(
+            tx_hash=tx_hash,
+            expected_source_id=source.artifact_id_bytes32,
+            expected_target_id=target.artifact_id_bytes32
+        )
+
+        return {
+            "source_artifact_id": source.artifact_id,
+            "target_artifact_id": target.artifact_id,
+            "relationship": "UsedForTraining",
+            "verification": verification,
+            "message": "Provenance relationship successfully recorded."
+        }
+
+    except TransactionNotFound:
+        raise HTTPException(
+            status_code=409,
+            detail="Transaction has not been mined yet. Retry later."
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc)
+        )
+
+    except (
+        ConnectionError,
+        RuntimeError,
+        FileNotFoundError
+    ) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc)
+        )
+
+
+# ================================================
+# 9. GET PROVENANCE LINK
+# ================================================
+
+@router.get(
+    "/provenance/{source_artifact_id}/{target_artifact_id}"
+)
+def get_training_provenance(
+    source_artifact_id: str,
+    target_artifact_id: str,
+    db: Session = Depends(get_db)
+):
+
+    source, target = get_training_pair(
+        db,
+        source_artifact_id,
+        target_artifact_id
+    )
+
+    try:
+
+        return blockchain_service.get_provenance_link(
+            source.artifact_id_bytes32,
+            target.artifact_id_bytes32
+        )
+
+    except ContractLogicError:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Provenance relationship does not exist."
+        )
+
+    except (
+        ConnectionError,
+        RuntimeError,
+        FileNotFoundError
+    ) as exc:
 
         raise HTTPException(
             status_code=503,

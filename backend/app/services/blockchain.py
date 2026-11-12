@@ -336,6 +336,244 @@ class BlockchainService:
             "transaction_status": "confirmed"
         }
 
+        # ================================================
+    # PROVENANCE LINKING
+    # ================================================
 
+    @staticmethod
+    def _decode_bytes32(value: str, field_name: str) -> bytes:
+
+        if (
+            not isinstance(value, str)
+            or not value.startswith("0x")
+            or len(value) != 66
+        ):
+            raise ValueError(f"Invalid {field_name}.")
+
+        try:
+            result = bytes.fromhex(value[2:])
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid hexadecimal {field_name}."
+            ) from exc
+
+        if len(result) != 32:
+            raise ValueError(f"{field_name} must be exactly 32 bytes.")
+
+        return result
+
+
+    def prepare_training_link(
+        self,
+        source_artifact_id: str,
+        target_artifact_id: str,
+        registrar_address: str
+    ) -> dict:
+
+        # Validate identifiers.
+        source_id = self._decode_bytes32(
+            source_artifact_id,
+            "source artifact ID"
+        )
+
+        target_id = self._decode_bytes32(
+            target_artifact_id,
+            "target artifact ID"
+        )
+
+        # Validate wallet address.
+        if not Web3.is_address(registrar_address):
+            raise ValueError("Invalid registrar address.")
+
+        registrar = Web3.to_checksum_address(
+            registrar_address
+        )
+
+        contract = self.get_contract()
+
+        # RelationshipType.UsedForTraining = 0.
+        function = contract.functions.linkArtifacts(
+            source_id,
+            target_id,
+            0
+        )
+
+        try:
+
+            # Simulate the transaction.
+            # This checks the contract's validation rules
+            # and the registrar's permissions.
+            function.call({
+                "from": registrar
+            })
+
+            # Build an unsigned transaction.
+            prepared = function.build_transaction({
+                "from": registrar,
+                "chainId": self.w3.eth.chain_id,
+                "value": 0
+            })
+
+        except ContractLogicError as exc:
+
+            raise ValueError(
+                f"Smart contract rejected the provenance link: {exc}"
+            ) from exc
+
+        return {
+            "from": registrar,
+            "to": Web3.to_checksum_address(contract.address),
+            "data": prepared["data"],
+            "value": "0x0",
+            "chain_id": self.w3.eth.chain_id
+        }
+
+
+    def confirm_training_link(
+        self,
+        tx_hash: str,
+        expected_source_id: str,
+        expected_target_id: str
+    ) -> dict:
+
+        contract = self.get_contract()
+
+        source_id = self._decode_bytes32(
+            expected_source_id,
+            "source artifact ID"
+        )
+
+        target_id = self._decode_bytes32(
+            expected_target_id,
+            "target artifact ID"
+        )
+
+        # Retrieve transaction and receipt.
+        transaction = self.w3.eth.get_transaction(tx_hash)
+
+        receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+
+        if receipt["status"] != 1:
+            raise ValueError("Provenance transaction failed.")
+
+        # Ensure transaction targeted our contract.
+        if (
+            transaction["to"] is None
+            or Web3.to_checksum_address(transaction["to"])
+            != Web3.to_checksum_address(contract.address)
+        ):
+            raise ValueError(
+                "Transaction was not sent to the ChainTrace contract."
+            )
+
+        # Decode ArtifactLinked events.
+        events = contract.events.ArtifactLinked().process_receipt(
+            receipt,
+            errors=DISCARD
+        )
+
+        matching_events = []
+
+        for event in events:
+
+            args = event["args"]
+
+            event_source = Web3.to_bytes(
+                primitive=args["sourceArtifactId"]
+            )
+
+            event_target = Web3.to_bytes(
+                primitive=args["targetArtifactId"]
+            )
+
+            relationship_type = int(args["relationshipType"])
+
+            if (
+                event_source == source_id
+                and event_target == target_id
+                and relationship_type == 0
+            ):
+                matching_events.append(event)
+
+        if len(matching_events) != 1:
+            raise ValueError(
+                "Expected exactly one matching ArtifactLinked event."
+            )
+
+        args = matching_events[0]["args"]
+
+        linked_by = Web3.to_checksum_address(
+            args["linkedBy"]
+        )
+
+        transaction_sender = Web3.to_checksum_address(
+            transaction["from"]
+        )
+
+        if linked_by != transaction_sender:
+            raise ValueError("Transaction sender mismatch.")
+
+        return {
+            "transaction_hash": Web3.to_hex(
+                receipt["transactionHash"]
+            ),
+            "block_number": int(receipt["blockNumber"]),
+            "source_artifact_id": Web3.to_hex(
+                args["sourceArtifactId"]
+            ),
+            "target_artifact_id": Web3.to_hex(
+                args["targetArtifactId"]
+            ),
+            "relationship_type": "UsedForTraining",
+            "linked_by": linked_by,
+            "linked_at": int(args["linkedAt"]),
+            "transaction_status": "confirmed"
+        }
+
+
+    def get_provenance_link(
+        self,
+        source_artifact_id: str,
+        target_artifact_id: str
+    ) -> dict:
+
+        source_id = self._decode_bytes32(
+            source_artifact_id,
+            "source artifact ID"
+        )
+
+        target_id = self._decode_bytes32(
+            target_artifact_id,
+            "target artifact ID"
+        )
+
+        contract = self.get_contract()
+
+        result = contract.functions.getProvenanceLink(
+            source_id,
+            target_id
+        ).call()
+
+        relationship_names = {
+            0: "UsedForTraining",
+            1: "Produced",
+            2: "PackagedAs",
+            3: "DeployedAs"
+        }
+
+        relationship_type = int(result[0])
+
+        return {
+            "source_artifact_id": source_artifact_id,
+            "target_artifact_id": target_artifact_id,
+            "relationship_type": relationship_type,
+            "relationship_name": relationship_names.get(
+                relationship_type,
+                "Unknown"
+            ),
+            "linked_by": Web3.to_checksum_address(result[1]),
+            "linked_at": int(result[2]),
+            "exists": bool(result[3])
+        }
 
 blockchain_service = BlockchainService()

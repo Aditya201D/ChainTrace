@@ -1,0 +1,17 @@
+{
+    "manifest_version": 1,
+    "training_run_name": "chaintrace-provenance-integration-test",
+    "artifact_type": "TrainingRun",
+    "execution_status": "metadata_only_integration_test",
+    "dataset": {
+        "artifact_id": "dataset:2bbc2399f84a48d4b91bf338c0285382",
+        "content_hash": "0x955013853013316db7aff7db611f868312b0d393a5d1b5d42ce3f7c3ab7de3a8"
+    },
+    "training": {
+        "algorithm": "Not executed",
+        "hyperparameters": {}
+    },
+    "code_version": null,
+    "created_at": "2026-11-12T09:42:15.201720+00:00",
+    "note": "This manifest is for testing ChainTrace provenance linking. It does not claim that an actual training job was executed."
+}
