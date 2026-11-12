@@ -24,7 +24,9 @@ from app.schemas.blockchain import (
     PrepareModelLinkRequest,
     ConfirmModelLinkRequest,
     PrepareModelApprovalRequest,
-    ConfirmModelApprovalRequest
+    ConfirmModelApprovalRequest,
+    PrepareModelRevocationRequest,
+    ConfirmModelRevocationRequest
 )
 
 from app.services.blockchain import blockchain_service
@@ -1024,6 +1026,112 @@ def get_model_audit_status(
 
     except ContractLogicError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+# ================================================
+# 15. AUDITOR APPROVAL REVOCATION
+# ================================================
+
+@router.post("/audit/models/{model_id}/prepare-revocation")
+def prepare_model_revocation(
+    model_id: str,
+    request: PrepareModelRevocationRequest,
+    db: Session = Depends(get_db)
+):
+    record = get_approval_model(db, model_id)
+
+    try:
+        chain_record = blockchain_service.get_artifact(
+            record.artifact_id_bytes32
+        )
+
+        if (
+            not chain_record["exists"]
+            or chain_record["artifact_type"] != 2
+            or chain_record["content_hash"].lower()
+            != record.content_hash_bytes32.lower()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="On-chain model metadata mismatch."
+            )
+
+        transaction = blockchain_service.prepare_model_revocation(
+            model_id=record.artifact_id_bytes32,
+            auditor_address=request.auditor_address
+        )
+
+        return {
+            "model_id": record.artifact_id,
+            "transaction": transaction,
+            "message": "Revocation transaction prepared."
+        }
+
+    except HTTPException:
+        raise
+
+    except ContractLogicError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/audit/models/{model_id}/confirm-revocation")
+def confirm_model_revocation(
+    model_id: str,
+    request: ConfirmModelRevocationRequest,
+    db: Session = Depends(get_db)
+):
+    record = get_approval_model(db, model_id)
+
+    if (
+        not request.tx_hash.startswith("0x")
+        or len(request.tx_hash) != 66
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid transaction hash."
+        )
+
+    try:
+        bytes.fromhex(request.tx_hash[2:])
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid hexadecimal transaction hash."
+        )
+
+    try:
+        result = blockchain_service.confirm_model_revocation(
+            tx_hash=request.tx_hash,
+            expected_model_id=record.artifact_id_bytes32
+        )
+
+        return {
+            "model_id": record.artifact_id,
+            "verification": result,
+            "message": "Revocation transaction verified."
+        }
+
+    except TransactionNotFound:
+        raise HTTPException(
+            status_code=409,
+            detail="Transaction not mined yet. Retry confirmation."
+        )
+
+    except (ContractLogicError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     except (
         ConnectionError, RuntimeError, FileNotFoundError

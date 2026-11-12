@@ -761,5 +761,120 @@ class BlockchainService:
             "transaction_status": "confirmed"
         }
 
+    
+    # ================================================
+    # AUDITOR APPROVAL REVOCATION
+    # ================================================
+
+    def prepare_model_revocation(
+        self,
+        model_id: str,
+        auditor_address: str
+    ) -> dict:
+
+        model_bytes = self._decode_bytes32(
+            model_id, "model artifact ID"
+        )
+
+        if not Web3.is_address(auditor_address):
+            raise ValueError("Invalid auditor address.")
+
+        auditor = Web3.to_checksum_address(auditor_address)
+        contract = self.get_contract()
+
+        function = contract.functions.revokeModelApproval(
+            model_bytes
+        )
+
+        try:
+            # Check role permissions and approval state.
+            function.call({"from": auditor})
+
+            prepared = function.build_transaction({
+                "from": auditor,
+                "chainId": self.w3.eth.chain_id,
+                "value": 0
+            })
+
+        except ContractLogicError as exc:
+            raise ValueError(
+                f"Contract rejected revocation: {exc}"
+            ) from exc
+
+        return {
+            "from": auditor,
+            "to": Web3.to_checksum_address(contract.address),
+            "data": prepared["data"],
+            "value": "0x0",
+            "chain_id": self.w3.eth.chain_id
+        }
+
+
+    def confirm_model_revocation(
+        self,
+        tx_hash: str,
+        expected_model_id: str
+    ) -> dict:
+
+        model_bytes = self._decode_bytes32(
+            expected_model_id, "model artifact ID"
+        )
+
+        contract = self.get_contract()
+
+        transaction = self.w3.eth.get_transaction(tx_hash)
+        receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+
+        if receipt["status"] != 1:
+            raise ValueError("Revocation transaction failed.")
+
+        if (
+            transaction["to"] is None
+            or Web3.to_checksum_address(transaction["to"])
+            != Web3.to_checksum_address(contract.address)
+        ):
+            raise ValueError("Incorrect contract destination.")
+
+        events = (
+            contract.events.ModelApprovalRevoked()
+            .process_receipt(receipt, errors=DISCARD)
+        )
+
+        matching = []
+
+        for event in events:
+            args = event["args"]
+
+            if (
+                bytes(args["modelArtifactId"]) == model_bytes
+                and Web3.to_checksum_address(args["revokedBy"])
+                == Web3.to_checksum_address(transaction["from"])
+            ):
+                matching.append(event)
+
+        if len(matching) != 1:
+            raise ValueError(
+                "Expected exactly one matching "
+                "ModelApprovalRevoked event."
+            )
+
+        args = matching[0]["args"]
+
+        return {
+            "transaction_hash": Web3.to_hex(
+                receipt["transactionHash"]
+            ),
+            "block_number": int(receipt["blockNumber"]),
+            "model_artifact_id": Web3.to_hex(
+                args["modelArtifactId"]
+            ),
+            "revoked_by": Web3.to_checksum_address(
+                args["revokedBy"]
+            ),
+            "revoked_at": int(args["revokedAt"]),
+            "transaction_status": "confirmed"
+        }
+
+
 
 blockchain_service = BlockchainService()

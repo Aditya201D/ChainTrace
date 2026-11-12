@@ -43,3 +43,10 @@ class PrepareModelApprovalRequest(BaseModel):
 
 class ConfirmModelApprovalRequest(BaseModel):
     tx_hash: str
+
+class PrepareModelRevocationRequest(BaseModel):
+    auditor_address: str
+
+
+class ConfirmModelRevocationRequest(BaseModel):
+    tx_hash: str
