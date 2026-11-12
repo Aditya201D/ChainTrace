@@ -50,3 +50,14 @@ class PrepareModelRevocationRequest(BaseModel):
 
 class ConfirmModelRevocationRequest(BaseModel):
     tx_hash: str
+
+class PreparePackagingRequest(BaseModel):
+    model_artifact_id: str
+    container_artifact_id: str
+    operator_address: str
+
+
+class ConfirmPackagingRequest(BaseModel):
+    model_artifact_id: str
+    container_artifact_id: str
+    tx_hash: str

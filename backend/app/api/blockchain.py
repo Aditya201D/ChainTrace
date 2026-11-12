@@ -26,7 +26,9 @@ from app.schemas.blockchain import (
     PrepareModelApprovalRequest,
     ConfirmModelApprovalRequest,
     PrepareModelRevocationRequest,
-    ConfirmModelRevocationRequest
+    ConfirmModelRevocationRequest,
+    PreparePackagingRequest,
+    ConfirmPackagingRequest
 )
 
 from app.services.blockchain import blockchain_service
@@ -1133,6 +1135,217 @@ def confirm_model_revocation(
     except (ContractLogicError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+# ================================================
+# 16. CONTAINER PACKAGING
+# ================================================
+
+def get_packaging_pair(
+    db: Session,
+    model_id: str,
+    container_id: str
+):
+    model = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == model_id
+        )
+    )
+
+    container = db.scalar(
+        select(ArtifactRecord).where(
+            ArtifactRecord.artifact_id == container_id
+        )
+    )
+
+    if model is None or container is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Model or ContainerImage not found."
+        )
+
+    if model.artifact_type != ArtifactType.MODEL.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Source must be a Model."
+        )
+
+    if container.artifact_type != ArtifactType.CONTAINER_IMAGE.value:
+        raise HTTPException(
+            status_code=422,
+            detail="Target must be a ContainerImage."
+        )
+
+    if not model.chain_registered or not container.chain_registered:
+        raise HTTPException(
+            status_code=409,
+            detail="Both artifacts must be registered."
+        )
+
+    return model, container
+
+
+@router.post("/packaging/prepare")
+def prepare_packaging(
+    request: PreparePackagingRequest,
+    db: Session = Depends(get_db)
+):
+    model, container = get_packaging_pair(
+        db,
+        request.model_artifact_id,
+        request.container_artifact_id
+    )
+
+    try:
+        # Check both on-chain registrations.
+        for record, expected_type in [
+            (model, 2),
+            (container, 3)
+        ]:
+            chain = blockchain_service.get_artifact(
+                record.artifact_id_bytes32
+            )
+
+            if (
+                not chain["exists"]
+                or chain["artifact_type"] != expected_type
+                or chain["content_hash"].lower()
+                != record.content_hash_bytes32.lower()
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="On-chain artifact metadata mismatch."
+                )
+
+        # Approval is required before packaging.
+        approval = blockchain_service.get_model_approval(
+            model.artifact_id_bytes32
+        )
+
+        if not approval["approved"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Model does not have active auditor approval."
+            )
+
+        transaction = blockchain_service.prepare_training_link(
+            source_artifact_id=model.artifact_id_bytes32,
+            target_artifact_id=container.artifact_id_bytes32,
+            registrar_address=request.operator_address,
+            relationship_type=2
+        )
+
+        return {
+            "model_id": model.artifact_id,
+            "container_id": container.artifact_id,
+            "relationship": "PackagedAs",
+            "transaction": transaction
+        }
+
+    except HTTPException:
+        raise
+    except ContractLogicError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.post("/packaging/confirm")
+def confirm_packaging(
+    request: ConfirmPackagingRequest,
+    db: Session = Depends(get_db)
+):
+    model, container = get_packaging_pair(
+        db,
+        request.model_artifact_id,
+        request.container_artifact_id
+    )
+
+    if (
+        not request.tx_hash.startswith("0x")
+        or len(request.tx_hash) != 66
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid transaction hash."
+        )
+
+    try:
+        bytes.fromhex(request.tx_hash[2:])
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid hexadecimal transaction hash."
+        )
+
+    try:
+        result = blockchain_service.confirm_training_link(
+            tx_hash=request.tx_hash,
+            expected_source_id=model.artifact_id_bytes32,
+            expected_target_id=container.artifact_id_bytes32,
+            relationship_type=2
+        )
+
+        return {
+            "model_id": model.artifact_id,
+            "container_id": container.artifact_id,
+            "relationship": "PackagedAs",
+            "verification": result,
+            "message": "Container packaging confirmed."
+        }
+
+    except TransactionNotFound:
+        raise HTTPException(
+            status_code=409,
+            detail="Transaction not mined yet."
+        )
+    except (ContractLogicError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except (
+        ConnectionError, RuntimeError, FileNotFoundError
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/packaging/{model_id}/{container_id}")
+def get_packaging(
+    model_id: str,
+    container_id: str,
+    db: Session = Depends(get_db)
+):
+    model, container = get_packaging_pair(
+        db, model_id, container_id
+    )
+
+    try:
+        result = blockchain_service.get_provenance_link(
+            model.artifact_id_bytes32,
+            container.artifact_id_bytes32
+        )
+
+        if not result["exists"] or result["relationship_type"] != 2:
+            raise HTTPException(
+                status_code=404,
+                detail="PackagedAs relationship not found."
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except ContractLogicError:
+        raise HTTPException(
+            status_code=404,
+            detail="PackagedAs relationship not found."
+        )
     except (
         ConnectionError, RuntimeError, FileNotFoundError
     ) as exc:

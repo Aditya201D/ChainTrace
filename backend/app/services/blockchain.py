@@ -371,7 +371,7 @@ class BlockchainService:
         relationship_type: int = 0
     ) -> dict:
         
-        if relationship_type not in (0, 1):
+        if relationship_type not in (0, 1, 2):
             raise ValueError("Unsupported relationship type.")
 
         # Validate identifiers.
@@ -441,7 +441,7 @@ class BlockchainService:
         relationship_type: int = 0
     ) -> dict:
 
-        if relationship_type not in (0, 1):
+        if relationship_type not in (0, 1, 2):
             raise ValueError("Unsupported relationship type.")
 
         contract = self.get_contract()
@@ -532,9 +532,11 @@ class BlockchainService:
             "target_artifact_id": Web3.to_hex(
                 args["targetArtifactId"]
             ),
-            "relationship_type": (
-                "UsedForTraining" if relationship_type == 0 else "Produced"
-            ),
+            "relationship_type": {
+                0: "UsedForTraining",
+                1: "Produced",
+                2: "PackagedAs"
+            }[relationship_type],
             "linked_by": linked_by,
             "linked_at": int(args["linkedAt"]),
             "transaction_status": "confirmed"

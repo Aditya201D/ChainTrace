@@ -1,0 +1,10 @@
+{
+  "artifact_type": "ContainerImage",
+  "name": "chaintrace-test-container",
+  "version": "1.0.0",
+  "model_artifact_id": "model:b752d2cb4ba34d518bd078f7d9165612",
+  "image_digest": null,
+  "registry": null,
+  "status": "metadata_only_integration_test",
+  "description": "Simulated container packaging for ChainTrace integration testing. No Docker image has been built."
+}
