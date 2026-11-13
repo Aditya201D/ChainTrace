@@ -11,6 +11,7 @@ from app.models.artifact import ArtifactRecord
 from app.api.artifacts import router as artifact_router
 from app.api.blockchain import router as blockchain_router
 from app.api.deployments import router as deployments_router
+from app.api.consumer import router as consumer_router
 
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ app = FastAPI(
 app.include_router(artifact_router)
 app.include_router(blockchain_router)
 app.include_router(deployments_router)
+app.include_router(consumer_router)
 
 
 @app.get("/health")
