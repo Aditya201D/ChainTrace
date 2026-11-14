@@ -1,0 +1,26 @@
+import { useState, type FormEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowRight, BadgeCheck, Fingerprint, ScanSearch, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { api } from '../api'
+import { Copy, Flag, Heading, Panel, Pill, Short, State } from '../components/Ui'
+
+export default function Verify() {
+  const [params, setParams] = useSearchParams()
+  const idFromUrl = params.get('id')||''
+  const [draft, setDraft] = useState(idFromUrl)
+  const verify = useQuery({queryKey:['consumerVerify',idFromUrl],queryFn:()=>api.verifyDeployment(idFromUrl),enabled:!!idFromUrl,retry:false})
+  const report = verify.data
+  const submit = (e: FormEvent) => {e.preventDefault();setParams(draft.trim()?{id:draft.trim()}:{})}
+  return <div className="page-container"><Heading eyebrow="CONSUMER / TRUST VERIFICATION" title="Verify before use." desc="Check an entire deployed model lineage, independently of the person who registered it."/>
+    <div className="verify-intro"><div><ScanSearch size={23}/><h2>Deployment verification</h2><p>Enter a ChainTrace deployment identifier to inspect recorded integrity, provenance and current approval.</p></div><div className="verify-intro-tag">READ-ONLY / ON-CHAIN VERIFICATION</div></div>
+    <form className="verify-form" onSubmit={submit}><label className="field-label" htmlFor="deployment-id">DEPLOYMENT ARTIFACT ID</label><div className="verify-input-row"><div className="verify-input"><Fingerprint size={19}/><input id="deployment-id" value={draft} onChange={e=>setDraft(e.target.value)} placeholder="deployment:..." autoComplete="off" spellCheck={false}/></div><button className="btn btn-primary" disabled={!draft.trim()||verify.isFetching} type="submit">{verify.isFetching?'Verifying…':'Run verification'} <ArrowRight size={16}/></button></div></form>
+    {!idFromUrl?<div className="verify-idle"><ScanSearch size={33}/><h3>Ready to verify a deployment</h3><p>Verification runs against the local blockchain and stored artifact files. No wallet is required for read access.</p><Link to="/deployments">Browse deployment records <ArrowRight size={15}/></Link></div>:verify.isPending?<State type="loading" message="Reading artifacts, provenance links and auditor approval…"/>:verify.isError?<State type="error" message={(verify.error as Error).message}/>:report&&<div className="verify-report reveal"><div className={'report-banner '+(report.trusted_for_current_policy?'pass':'fail')}><span className="report-large-icon">{report.trusted_for_current_policy?<ShieldCheck size={34}/>:<ShieldAlert size={34}/>}</span><div><span>VERIFICATION RESULT</span><h2>{report.trusted_for_current_policy?'Current policy satisfied':'Current policy not satisfied'}</h2><p>{report.trusted_for_current_policy?'The recorded release chain passes integrity, lineage and current approval checks.':'Some checks are incomplete or invalid. Review the detailed findings below.'}</p></div><Pill label={report.trusted_for_current_policy?'VERIFIED':'ATTENTION'} variant={report.trusted_for_current_policy?'good':'bad'}/></div>
+      <div className="verification-grid"><Panel title="Core checks" sub="Computed from current blockchain and local files"><div className="check-list spacious"><Flag good={report.lineage_complete} label="Complete lineage found"/><Flag good={report.provenance_integrity_verified} label="All recorded artifact hashes match"/><Flag good={report.approval_active_now} label="Active auditor approval"/><Flag good={report.trusted_for_current_policy} label="Release meets current policy"/></div></Panel><Panel title="Artifact coverage" sub="Each artifact is checked separately"><div className="report-artifacts">{[...Object.values(report.artifacts),...report.datasets].map(a=><div key={a.artifact_id} className="report-asset"><div><span>{a.artifact_type}</span><small><Short value={a.artifact_id} start={18} end={8}/></small></div><Pill label={a.verified?'Valid':'Failed'} variant={a.verified?'good':'bad'} /></div>)}</div></Panel></div>
+      <Panel title="On-chain relationships" sub="Evidence returned from the current deployed registry"><div className="report-relations">{report.relationships.map((r,i)=><div key={i} className="relation-row"><BadgeCheck size={17}/><span className="mono"><Short value={r.source} start={19} end={5}/></span><span className="relation-name">{r.relationship}</span><span className="mono"><Short value={r.target} start={19} end={5}/></span><Pill label={r.verified?'Verified':'Failed'} variant={r.verified?'good':'bad'}/></div>)}{!report.relationships.length && <State type="empty" message="No verified relationships could be discovered."/>}</div></Panel>
+      {report.errors.length>0&&<Panel title="Verification findings"><div className="finding-list">{report.errors.map((err,i)=><p key={i}><ShieldAlert size={15}/>{err}</p>)}</div></Panel>}
+      <div className="verify-bottom"><span className="mono">{report.deployment_id}</span><Copy value={report.deployment_id}/><Link to="/lineage">Open graph <ArrowRight size={15}/></Link></div>
+      <p className="report-disclaimer">This result verifies recorded integrity, declared lineage, and current attestation state. It does not prove model safety, training execution, or availability of a live serving endpoint.</p>
+    </div>}
+  </div>
+}
