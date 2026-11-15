@@ -1,0 +1,8 @@
+-r ../requirements.txt
+
+numpy
+pandas
+scikit-learn
+joblib
+ucimlrepo
+mlflow
