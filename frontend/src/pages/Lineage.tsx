@@ -1,13 +1,41 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, GitBranch } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Component, lazy, Suspense, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import type { ConsumerReport, ModelReport } from "../types";
 import LineageGraph from "../components/LineageGraph";
 import { Heading, Panel, Pill, State } from "../components/Ui";
 
+const LineageGraph3D = lazy(() => import("../components/LineageGraph3D"));
+
+interface ErrorBoundaryProps {
+    fallback: (retry: () => void, error: Error | null) => ReactNode;
+    children: ReactNode;
+}
+interface ErrorBoundaryState {
+    hasError: boolean;
+    error: Error | null;
+}
+class Graph3DErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+    state: ErrorBoundaryState = { hasError: false, error: null };
+    static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+        return { hasError: true, error };
+    }
+    componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+        console.error("Three.js 3D Graph Error:", error, errorInfo);
+    }
+    render() {
+        if (this.state.hasError) {
+            return this.props.fallback(() => this.setState({ hasError: false, error: null }), this.state.error);
+        }
+        return this.props.children;
+    }
+}
+
 export default function Lineage() {
     const [kind, setKind] = useState<"Deployment" | "Model">("Deployment");
+    const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
     const [selection, setSelection] = useState("");
     const items = useQuery({ queryKey: ["artifacts", kind], queryFn: () => api.artifacts(kind) });
     const ids = useMemo(() => items.data?.items.map(a => a.artifact_id) || [], [items.data]);
@@ -81,17 +109,35 @@ export default function Lineage() {
                         </div>
                     </div>
                     <div className="explorer-result">
-                        <span>CHAIN INTEGRITY</span>
-                        {lineage.isLoading ? (
-                            <Pill label="Checking" />
-                        ) : report ? (
-                            <Pill
-                                label={complete ? "Verified" : "Attention required"}
-                                variant={complete ? "good" : "bad"}
-                            />
-                        ) : (
-                            <Pill label="Not available" />
-                        )}
+                        <div className="segmented">
+                            <button
+                                type="button"
+                                onClick={() => setViewMode("2d")}
+                                className={viewMode === "2d" ? "selected" : ""}
+                            >
+                                2D Graph
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setViewMode("3d")}
+                                className={viewMode === "3d" ? "selected" : ""}
+                            >
+                                3D Graph ✨
+                            </button>
+                        </div>
+                        <div className="explorer-status-row">
+                            <span>CHAIN INTEGRITY</span>
+                            {lineage.isLoading ? (
+                                <Pill label="Checking" />
+                            ) : report ? (
+                                <Pill
+                                    label={complete ? "Verified" : "Attention required"}
+                                    variant={complete ? "good" : "bad"}
+                                />
+                            ) : (
+                                <Pill label="Not available" />
+                            )}
+                        </div>
                     </div>
                 </div>
                 {!target ? (
@@ -110,7 +156,29 @@ export default function Lineage() {
                 ) : lineage.isError ? (
                     <State type="error" message={(lineage.error as Error).message} />
                 ) : report ? (
-                    <LineageGraph key={target} report={report} />
+                    viewMode === "3d" ? (
+                        <Graph3DErrorBoundary
+                            fallback={(_retry, err) => (
+                                <div className="state-view state-error">
+                                    <p>3D visualization error: {err?.message || "Graphics error on this device."}</p>
+                                    <button
+                                        type="button"
+                                        className="btn btn-secondary"
+                                        onClick={() => setViewMode("2d")}
+                                        style={{ marginTop: 8 }}
+                                    >
+                                        Switch to 2D Graph
+                                    </button>
+                                </div>
+                            )}
+                        >
+                            <Suspense fallback={<State type="loading" message="Initializing 3D engine and shaders…" />}>
+                                <LineageGraph3D key={`${target}-3d`} report={report} />
+                            </Suspense>
+                        </Graph3DErrorBoundary>
+                    ) : (
+                        <LineageGraph key={target} report={report} />
+                    )
                 ) : null}
             </Panel>
             <div className="explorer-note">

@@ -2560,3 +2560,281 @@ button {
         padding: 17px;
     }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Phase 2: Visual Enhancements (Three.js 3D, Stamp, Skeleton, Blockies)
+   ────────────────────────────────────────────────────────────────── */
+
+/* ── 1. Three.js 3D Lineage Graph ───────────────────────────────── */
+.graph-3d-canvas {
+    height: 480px;
+    background: #0c141e;
+    position: relative;
+    border-radius: 0 0 11px 11px;
+    overflow: hidden;
+    cursor: grab;
+}
+.graph-3d-canvas:active {
+    cursor: grabbing;
+}
+.node-3d {
+    width: 172px;
+    padding: 13px 14px 14px;
+    background: linear-gradient(150deg, rgba(26, 43, 54, 0.95), rgba(21, 33, 46, 0.95));
+    border: 1px solid #395866;
+    border-radius: 11px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    user-select: none;
+    transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+    backdrop-filter: blur(8px);
+}
+.node-3d:hover {
+    transform: translateY(-2px);
+    border-color: #84dce5;
+    box-shadow: 0 12px 36px rgba(16, 56, 68, 0.5);
+}
+.node-3d-selected {
+    border-color: #84dce5 !important;
+    box-shadow: 0 0 0 3px rgba(132, 220, 229, 0.25), 0 12px 40px rgba(5, 18, 25, 0.8) !important;
+}
+.node-3d-fail {
+    border-color: #754951;
+}
+.node-3d-fail.node-3d-selected {
+    border-color: #ef9f9e !important;
+    box-shadow: 0 0 0 3px rgba(239, 159, 158, 0.25), 0 12px 40px rgba(35, 15, 18, 0.8) !important;
+}
+.node-3d-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.node-3d-step {
+    font-size: 8.5px;
+    color: #8aa8b4;
+    letter-spacing: 0.05em;
+}
+.node-3d-status {
+    color: #76d4b1;
+    display: flex;
+    align-items: center;
+}
+.node-3d-fail .node-3d-status {
+    color: #ed9898;
+}
+.node-3d-icon {
+    height: 32px;
+    width: 32px;
+    border: 1px solid #476c79;
+    background: #23404c;
+    color: #9be2e5;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    margin: 10px 0 9px;
+}
+.node-3d strong {
+    font-family: Manrope, sans-serif;
+    color: #dfeef1;
+    font-size: 12px;
+    letter-spacing: -0.02em;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.node-3d-id {
+    font-size: 8.5px;
+    color: #76929f;
+    margin-top: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.edge-3d-label {
+    background: rgba(16, 23, 34, 0.92);
+    border: 1px solid #2a3c4a;
+    padding: 3px 7px;
+    border-radius: 5px;
+    font-size: 8.5px;
+    color: #a2b2c2;
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+}
+.explorer-status-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ── 2. Animated Verification Stamp ─────────────────────────────── */
+.stamp-wrap {
+    position: relative;
+    width: 63px;
+    height: 63px;
+    display: grid;
+    place-items: center;
+}
+.stamp-icon {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    animation: stamp-in 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+.stamp-pass {
+    border: 1px solid #3c7a67;
+    background: #214b3c;
+    color: #83dcb0;
+    box-shadow: 0 0 24px rgba(116, 213, 180, 0.35);
+}
+.stamp-fail {
+    background: #4b2b35;
+    border: 1px solid #77464c;
+    color: #efa6a6;
+    box-shadow: 0 0 24px rgba(239, 159, 158, 0.35);
+}
+.stamp-check {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    pointer-events: none;
+}
+.stamp-check path {
+    stroke-dasharray: 40;
+    stroke-dashoffset: 40;
+    animation: draw-check 0.5s 0.3s ease-out forwards;
+}
+.stamp-cross path {
+    stroke-dasharray: 30;
+    stroke-dashoffset: 30;
+    animation: draw-check 0.4s 0.25s ease-out forwards;
+}
+.stamp-particles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.stamp-particles span {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    animation: particle-burst 0.75s 0.2s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    opacity: 0;
+}
+.particle-pass {
+    background: #74d5b4;
+    box-shadow: 0 0 6px #74d5b4;
+}
+.particle-fail {
+    background: #ef9f9e;
+    box-shadow: 0 0 6px #ef9f9e;
+}
+@keyframes stamp-in {
+    0% {
+        opacity: 0;
+        transform: scale(0.2) rotate(-15deg);
+    }
+    60% {
+        opacity: 1;
+        transform: scale(1.15) rotate(3deg);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+    }
+}
+@keyframes draw-check {
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+@keyframes particle-burst {
+    0% {
+        opacity: 1;
+        transform: translate(-50%, -50%) rotate(var(--angle)) translateY(0px) scale(1);
+    }
+    70% {
+        opacity: 0.8;
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) rotate(var(--angle)) translateY(44px) scale(0.3);
+    }
+}
+
+/* ── 3. Skeleton Loaders ─────────────────────────────────────────── */
+.skeleton {
+    background: linear-gradient(90deg, #151f2b 25%, #223242 50%, #151f2b 75%);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.6s ease-in-out infinite;
+    border-radius: 4px;
+}
+@keyframes skeleton-shimmer {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+.skeleton-table {
+    width: 100%;
+    padding: 12px 24px;
+}
+.skeleton-thead {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 12px 0 16px;
+    border-bottom: 1px solid #25313e;
+}
+.skeleton-row {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 14px 0;
+    border-bottom: 1px solid #202c37;
+    animation: fade-up 0.3s ease-out both;
+}
+.skeleton-row:last-child {
+    border-bottom: none;
+}
+.skeleton-cell-artifact {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 160px;
+}
+.skeleton-stat {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+/* ── 4. Blockies Identicon ───────────────────────────────────────── */
+.blockies {
+    border-radius: 4px;
+    border: 1px solid rgba(132, 220, 229, 0.3);
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.4);
+    flex-shrink: 0;
+    display: inline-block;
+    vertical-align: middle;
+}
+.wallet-account-header {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin: 6px 0 12px;
+}
+.wallet-account-header .wallet-mono {
+    font-size: 10.5px;
+}
+
+

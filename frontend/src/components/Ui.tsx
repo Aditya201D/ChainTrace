@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, Check, CheckCircle2, CircleDashed, Clipboard, File, FileArchive, FileCode2, Layers, Server, Shield, XCircle } from 'lucide-react'
 import type { Artifact, ArtifactType } from '../types'
+import AnimatedNumber from './AnimatedNumber'
 
 export const iconForType: Record<ArtifactType, typeof File> = {
   Dataset: File,
@@ -50,6 +51,8 @@ export function ArtifactTable({ artifacts, showAll = false }: { artifacts: Artif
 export function Flag({ good, label }: { good: boolean; label: string }) {
   return <div className={'flag ' + (good ? 'flag-good' : 'flag-bad')}>{good ? <CheckCircle2 size={16}/> : <XCircle size={16}/>}<span>{label}</span></div>
 }
-export function NumberText({ value }: { value: number | undefined }) { return <>{value === undefined ? '—' : value.toLocaleString()}</> }
+export function NumberText({ value, duration }: { value: number | undefined; duration?: number }) {
+  return <AnimatedNumber value={value} duration={duration} />
+}
 export function formatBytes(bytes: number) { return bytes > 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : bytes > 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B` }
 export function EmptyMark() { return <Check size={16} /> }

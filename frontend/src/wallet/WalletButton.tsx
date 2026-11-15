@@ -1,6 +1,8 @@
 import { ChevronDown, Copy, RefreshCcw, Wallet } from "lucide-react";
 import { useState } from "react";
 import { useWallet } from "./WalletContext";
+import Blockies from "../components/Blockies";
+
 export default function WalletButton() {
     const wallet = useWallet();
     const [open, setOpen] = useState(false);
@@ -14,7 +16,7 @@ export default function WalletButton() {
                 </button>
             ) : (
                 <button className="wallet-action wallet-connected" onClick={() => setOpen(!open)}>
-                    <span className="wallet-dot" />
+                    <Blockies address={wallet.address} size={18} />
                     {short}
                     <ChevronDown size={14} />
                 </button>
@@ -25,7 +27,10 @@ export default function WalletButton() {
                     {wallet.address && (
                         <>
                             <div className="wallet-label">CONNECTED ACCOUNT</div>
-                            <div className="wallet-mono">{wallet.address}</div>
+                            <div className="wallet-account-header">
+                                <Blockies address={wallet.address} size={26} />
+                                <div className="wallet-mono">{wallet.address}</div>
+                            </div>
                             <div className="wallet-label">ON-CHAIN ROLES</div>
                             <div className="wallet-roles">
                                 {wallet.roles.length
