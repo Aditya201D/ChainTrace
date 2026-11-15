@@ -1,0 +1,137 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-15T07:58:01.721428+00:00",
+  "chain_id": 31337,
+  "contract_address": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "artifacts": [
+    {
+      "id": "dataset:2bbc2399f84a48d4b91bf338c0285382",
+      "bytes32": "0xae5f9f5056292578c64555d0b1676bb49236d3fdba24f230a3c21e94345c4ab6",
+      "type": "Dataset",
+      "hash": "0x955013853013316db7aff7db611f868312b0d393a5d1b5d42ce3f7c3ab7de3a8"
+    },
+    {
+      "id": "trainingrun:cc433ecd87ec4c67be605d7e134ebb83",
+      "bytes32": "0xbc5998fb9b05878fd491b7b9eed70abaa617a97e56f1fb87260cffe3cdc372a7",
+      "type": "TrainingRun",
+      "hash": "0x71f5eb1cefe443c2327375f1885d072f825672b3ee38a00bd27c33ada01daf5a"
+    },
+    {
+      "id": "model:b752d2cb4ba34d518bd078f7d9165612",
+      "bytes32": "0x3f3e100970c31d8abf9e96498b382f938da0183e1748ef21801c70a8dea64bf2",
+      "type": "Model",
+      "hash": "0x587b7a103e7505a7955c485628b1ad6fa98361a114bc03e9c1faf1e0dae7f32b"
+    },
+    {
+      "id": "containerimage:ef16fae1abe94616af6c0ac9bcf72c56",
+      "bytes32": "0xa1cd4eba93a5137704bbae3e3dea2ca8c5c3cd1ea5e1bb5ff290583cb67f899d",
+      "type": "ContainerImage",
+      "hash": "0x00d0f02fd0a486e55307a096499e0e5c7a200b3c00bd10627d1225720fb3b7a6"
+    },
+    {
+      "id": "deployment:6c19e31c5d7047afa2ccb39e6e03eedf",
+      "bytes32": "0x0bc58387d9ad58ca74669765537f32c642cdc330f0244017016767b6b2d0c507",
+      "type": "Deployment",
+      "hash": "0x27e15ec5a66dcfb1d293d8c202cd534af732ee745e83e38cfe4ccb6d45ea47c4"
+    },
+    {
+      "id": "dataset:2662054ac5c641f6bce991b5100be574",
+      "bytes32": "0xab551af4a00ee6c407eab9755f7ad190f6235ebfd67988bb6986612837426297",
+      "type": "Dataset",
+      "hash": "0xe6ac026a4a35ba5ea625935238ac62a70e77eef0e9eee72f8316f0584a32a170"
+    },
+    {
+      "id": "trainingrun:141e3503286941529357396081f62c22",
+      "bytes32": "0x48c859d50f5e8196f47b8ff14ee8a1c6fa245972643b3d5c4a9ebc945d2d12b7",
+      "type": "TrainingRun",
+      "hash": "0xba600c6d18dea73e1498e64448dcf9a0f0220c9768e500bb2243777863152a60"
+    },
+    {
+      "id": "model:8be33ca166d2474ca1e45e3ff1094414",
+      "bytes32": "0x95f6c0904a0e4576fbf8e60104ed32c1fc97550a9c1124f79d482706507b9d73",
+      "type": "Model",
+      "hash": "0x773f1fdfebb62abfe2a63fa89cf170a1e236d1809915a514f4770d9924061e4d"
+    },
+    {
+      "id": "dataset:295766e2575f4e2699c82a62328933ec",
+      "bytes32": "0x08a14f491c1c19198e314512eed851b3456621cab7b8e937d290293eee6392a4",
+      "type": "Dataset",
+      "hash": "0x26903de20b2d846b467338669d020881f13318aab6587c7c36c2030b76b74ec9"
+    },
+    {
+      "id": "trainingrun:5ea4cec4cc8c4e49ad604ed29dd8d69e",
+      "bytes32": "0x411cfbcda4d10d8d5fd38e45bf38b7deaa4c94b68488af1f20d0912c51ac175b",
+      "type": "TrainingRun",
+      "hash": "0x15511af5c1aad47f7b2610476c475a3aa62075370f400790ff3ea2ff024e647b"
+    },
+    {
+      "id": "containerimage:5e6c169034a24906921e246fdd101852",
+      "bytes32": "0x5e995ae05fbf340a755045db4a2774f404dc5aecbee748188e550336ecc497d2",
+      "type": "ContainerImage",
+      "hash": "0xcaaf1071093cf30647026fed5d29ed2f5a9e312a17ad52662d77c057a8ba40fc"
+    },
+    {
+      "id": "deployment:64f159121a0840f8ac3c8905f7346635",
+      "bytes32": "0x40a68ce271770cc67e48524276f7c07d74b8d23eb47a0ce8a5de0ec1741048d1",
+      "type": "Deployment",
+      "hash": "0x30ddf5b377e685a5f76da6a3caa95cd12c4dd4ca8d909b3056445f4f33c01309"
+    }
+  ],
+  "links": [
+    {
+      "source": "dataset:2bbc2399f84a48d4b91bf338c0285382",
+      "target": "trainingrun:cc433ecd87ec4c67be605d7e134ebb83",
+      "relationship_type": 0
+    },
+    {
+      "source": "trainingrun:cc433ecd87ec4c67be605d7e134ebb83",
+      "target": "model:b752d2cb4ba34d518bd078f7d9165612",
+      "relationship_type": 1
+    },
+    {
+      "source": "model:b752d2cb4ba34d518bd078f7d9165612",
+      "target": "containerimage:ef16fae1abe94616af6c0ac9bcf72c56",
+      "relationship_type": 2
+    },
+    {
+      "source": "containerimage:ef16fae1abe94616af6c0ac9bcf72c56",
+      "target": "deployment:6c19e31c5d7047afa2ccb39e6e03eedf",
+      "relationship_type": 3
+    },
+    {
+      "source": "dataset:2662054ac5c641f6bce991b5100be574",
+      "target": "trainingrun:141e3503286941529357396081f62c22",
+      "relationship_type": 0
+    },
+    {
+      "source": "trainingrun:141e3503286941529357396081f62c22",
+      "target": "model:8be33ca166d2474ca1e45e3ff1094414",
+      "relationship_type": 1
+    },
+    {
+      "source": "model:8be33ca166d2474ca1e45e3ff1094414",
+      "target": "containerimage:5e6c169034a24906921e246fdd101852",
+      "relationship_type": 2
+    },
+    {
+      "source": "dataset:295766e2575f4e2699c82a62328933ec",
+      "target": "trainingrun:5ea4cec4cc8c4e49ad604ed29dd8d69e",
+      "relationship_type": 0
+    },
+    {
+      "source": "containerimage:5e6c169034a24906921e246fdd101852",
+      "target": "deployment:64f159121a0840f8ac3c8905f7346635",
+      "relationship_type": 3
+    }
+  ],
+  "approvals": [
+    {
+      "model_id": "model:b752d2cb4ba34d518bd078f7d9165612",
+      "evidence_hash": "0x9c2bf6e69f6f8ca512637e8c9e2b549b24923430235f3f5be3525b54d7884e4d"
+    },
+    {
+      "model_id": "model:8be33ca166d2474ca1e45e3ff1094414",
+      "evidence_hash": "0x2413f5e43ab67aa499b6ec14c58cf13cdfb4aae7467bab338dca0b99fe0526f1"
+    }
+  ]
+}
